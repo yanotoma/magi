@@ -3,9 +3,9 @@
 Complete breakdown of what is done and what is pending, across every milestone.
 
 **Last updated:** 2026-08-06
-**Current phase:** M1 in progress (scaffold done)
+**Current phase:** M1 code complete; manual verification pending before tagging `0.1.0-alpha.1`
 **Current version:** `0.1.0-alpha.1` (unreleased — see [VERSIONING.md](VERSIONING.md))
-**Overall:** 21 / 130 tasks done (16%)
+**Overall:** 30 / 130 tasks done (23%)
 
 Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 
@@ -16,14 +16,14 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 | Milestone | Scope | Target version | Done | Total | Status |
 |---|---|---|---:|---:|---|
 | **M0** | Foundations | — | 15 | 15 | ✅ Complete |
-| **M1** | Shell — tray, hotkey, windows | `0.1.0-alpha.1` | 6 | 16 | 🔨 In progress |
+| **M1** | Shell — tray, hotkey, windows | `0.1.0-alpha.1` | 15 | 16 | 🔨 Awaiting manual verification |
 | **M2** | Config & providers | `0.2.0-alpha.1` | 0 | 17 | ⬜ |
 | **M3** | Pre-flight & capability tiers | `0.2.0-alpha.1` | 0 | 11 | ⬜ |
 | **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 0 | 14 | ⬜ |
 | **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 0 | 13 | ⬜ |
 | **M6** | Session machine & panel UX | `0.5.0-beta.1` | 0 | 15 | ⬜ |
 | **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 15 | ⬜ |
-| — | **v1 total** | `1.0.0` | **21** | **116** | |
+| — | **v1 total** | `1.0.0` | **30** | **116** | |
 | **M8** | v2 — wake word & TTS | `1.1.0` | 0 | 9 | 🔮 Post-v1 |
 | **M9** | v3 — computer use | `1.2.0` | 0 | 5 | 🔮 Post-v1 |
 
@@ -62,20 +62,20 @@ The tray app exists, the hotkey works, the windows appear. No intelligence yet.
 - [x] CI check asserting `Cargo.toml` and `package.json` versions agree
 
 **Tray**
-- [ ] `tray.rs` — tray icon with menu (Open, Settings, Quit) using `TrayIconBuilder`
-- [ ] Left click opens the panel; right click opens the menu
-- [ ] Tray icon reflects session state (idle / listening / thinking) and capability tier
-- [ ] macOS: set activation policy to `Accessory` so no Dock icon appears
+- [x] `tray.rs` — tray icon with menu (Open, Settings, Quit) using `TrayIconBuilder`
+- [x] Left click opens the panel; right click opens the menu
+- [ ] Tray icon reflects session state (idle / listening / thinking) and capability tier — the state-to-icon mapping is written and unit-tested; the icon assets and live updating are not, and the states it maps do not exist until M3/M4/M6
+- [x] macOS: set activation policy to `Accessory` so no Dock icon appears
 
 **Hotkey**
-- [ ] `hotkey.rs` — register the global shortcut via `tauri-plugin-global-shortcut`
-- [ ] Filter press vs release (the handler fires for both — a known footgun)
-- [ ] Detect and surface registration conflicts instead of failing silently
-- [ ] Add the required permissions to `capabilities/default.json`
+- [x] `hotkey.rs` — register the global shortcut via `tauri-plugin-global-shortcut`
+- [x] Filter press vs release (the handler fires for both — a known footgun)
+- [x] Detect and surface registration conflicts instead of failing silently
+- [x] Add the required permissions to `capabilities/default.json`
 
 **Windows**
-- [ ] `windows.rs` — panel window: transparent, undecorated, always-on-top, `skipTaskbar`, hidden by default
-- [ ] Settings window: normal decorated window; close hides rather than exits
+- [x] `windows.rs` — panel window: transparent, undecorated, always-on-top, hidden by default (`skipTaskbar` is a no-op on macOS; the Dock icon is suppressed by the activation policy instead)
+- [x] Settings window: normal decorated window; close hides rather than exits
 
 ---
 

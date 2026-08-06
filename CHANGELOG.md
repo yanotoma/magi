@@ -14,5 +14,10 @@ Target: `0.1.0-alpha.1` — M1, Shell.
 - Versioning policy and release train
 - Tauri v2 + SvelteKit + Svelte 5 project scaffold
 - CI on macOS: `cargo fmt`, `clippy -D warnings`, `cargo test`, `svelte-check`, and a release build
+- System tray icon with Open, Settings, and Quit
+- Global hotkey (`Alt+Space`) toggling a transparent overlay panel
+- Settings window (read-only placeholder)
+- Runs as a macOS background agent: no Dock icon, no app-switcher entry
+- Closing a window hides it instead of quitting
 
 [Unreleased]: https://github.com/yanotoma/magi/commits/main
