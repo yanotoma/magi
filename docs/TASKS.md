@@ -5,7 +5,7 @@ Complete breakdown of what is done and what is pending, across every milestone.
 **Last updated:** 2026-08-06
 **Current phase:** M0 complete, M1 not started
 **Current version:** `0.1.0-alpha.1` (unreleased — see [VERSIONING.md](VERSIONING.md))
-**Overall:** 13 / 124 tasks done (10%) — all foundational
+**Overall:** 15 / 129 tasks done (12%) — all foundational
 
 Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 
@@ -15,15 +15,15 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 
 | Milestone | Scope | Target version | Done | Total | Status |
 |---|---|---|---:|---:|---|
-| **M0** | Foundations | — | 13 | 13 | ✅ Complete |
+| **M0** | Foundations | — | 15 | 15 | ✅ Complete |
 | **M1** | Shell — tray, hotkey, windows | `0.1.0-alpha.1` | 0 | 16 | ⬜ Next |
-| **M2** | Config & providers | `0.2.0-alpha.1` | 0 | 13 | ⬜ |
+| **M2** | Config & providers | `0.2.0-alpha.1` | 0 | 16 | ⬜ |
 | **M3** | Pre-flight & capability tiers | `0.2.0-alpha.1` | 0 | 11 | ⬜ |
 | **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 0 | 14 | ⬜ |
 | **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 0 | 13 | ⬜ |
 | **M6** | Session machine & panel UX | `0.5.0-beta.1` | 0 | 15 | ⬜ |
 | **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 15 | ⬜ |
-| — | **v1 total** | `1.0.0` | **13** | **110** | |
+| — | **v1 total** | `1.0.0` | **15** | **115** | |
 | **M8** | v2 — wake word & TTS | `1.1.0` | 0 | 9 | 🔮 Post-v1 |
 | **M9** | v3 — computer use | `1.2.0` | 0 | 5 | 🔮 Post-v1 |
 
@@ -44,6 +44,8 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 - [x] Create project-local Claude skills (`rust`, `tauri-v2`, `svelte-5`)
 - [x] Choose license (Apache-2.0, for the explicit patent grant)
 - [x] Define the versioning policy and release train (`docs/VERSIONING.md`, `CHANGELOG.md`)
+- [x] Correct the provider architecture: `Provider` trait with separate OpenAI-compatible and Anthropic-native implementations (they are different wire protocols, not one protocol with quirks)
+- [x] Add project-local skills for LLM providers and macOS permissions
 
 ---
 
@@ -84,12 +86,15 @@ The tray app exists, the hotkey works, the windows appear. No intelligence yet.
 - [ ] Config versioning and a migration path (needed before the first public release, not after)
 - [ ] Write defaults on first run
 - [ ] Store and retrieve API keys via `keyring`, never in the TOML
+- [ ] Optional OAuth sign-in for Anthropic as an alternative to a pasted key (`Authorization: Bearer` + `anthropic-beta: oauth-2025-04-20`, short-lived tokens, refresh handling). Still billed as API usage — it removes key-pasting friction, not cost
 - [ ] `llm::provider` — provider registry (id, kind, base URL, model, tier)
 - [ ] Built-in presets for Ollama, LM Studio, OpenAI, Anthropic, OpenRouter
-- [ ] `llm::client` — OpenAI-compatible client over `reqwest`
+- [ ] `llm::provider` — the `Provider` trait; internal turn types are provider-neutral
+- [ ] `llm::openai` — OpenAI-compatible impl (Ollama, LM Studio, OpenAI, OpenRouter)
+- [ ] `llm::anthropic` — Anthropic native impl (x-api-key, top-level system, input_schema, base64 image source)
 - [ ] Server-sent-event streaming with incremental token emission
-- [ ] Per-provider quirk handling (auth header shape, endpoint path differences)
-- [ ] `LlmClient` trait plus `FakeLlmClient` for tests
+- [ ] Defensive SSE parsing — local backends split frames and omit terminators
+- [ ] `FakeProvider` for tests, replaying scripted turns including tool calls
 - [ ] Settings UI — provider list with add / edit / remove
 - [ ] Settings UI — hotkey capture control
 
@@ -216,6 +221,36 @@ The tray app exists, the hotkey works, the windows appear. No intelligence yet.
 - [ ] Coordinate-space handling across Retina and multi-display setups
 
 ---
+
+## Skills roadmap
+
+Project-local skills exist so future sessions don't re-derive version-specific traps. Written when the milestone that needs them starts — a skill written early goes stale before it is used.
+
+| Skill | Status | Covers |
+|---|---|---|
+| `rust` | ✅ | Conventions, crate map, error handling, threading |
+| `tauri-v2` | ✅ | v1/v2 API split, capabilities, tray, sidecars, overlay windows |
+| `svelte-5` | ✅ | Runes vs Svelte 4, `.svelte.ts`, Tauri IPC import paths |
+| `llm-providers` | ✅ | Provider protocol families, vision/tool/stream formats, pre-flight probes |
+| `macos-permissions` | ✅ | TCC, Info.plist, signing, notarization, sidecar signing |
+| `audio-stt` | M4 | cpal device handling, resampling, whisper-rs build and Metal |
+| `screen-capture` | M5 | xcap, multi-display, downscaling for vision cost |
+| `release` | M7 | Tag → universal build → sign → notarize → staple → GitHub release → updater |
+| `wake-word` | M8 | openWakeWord ONNX via `ort`, false-positive tuning |
+| `tts` | M8 | Piper sidecar, sentence chunking, barge-in |
+| `computer-use` | M9 | enigo, coordinate spaces, Retina and multi-display |
+
+A changelog skill was considered and rejected: the convention is three rules that already live in `VERSIONING.md` and `CLAUDE.md`, and a third copy would drift. It is a step inside the `release` skill, not a skill of its own.
+
+## Rejected approaches
+
+Recorded so they are not re-proposed.
+
+| Idea | Why not |
+|---|---|
+| Use a Claude Pro/Max subscription instead of an API key | The subscription covers claude.ai and Claude Code, not third-party API clients. Reusing their stored credentials means reverse-engineering a private auth flow, violates the terms, and breaks without warning. |
+| Drive Claude Code (`claude -p`) as a provider subprocess | It is an agentic coding tool, not a completions endpoint — wrong latency profile, wrong interface, and its tool-calling does not map onto `capture_screen`. Building on another client's auth is structurally fragile. |
+| One OpenAI-compatible client covering every provider | Anthropic diverges on auth header, system prompt placement, tool schema, image encoding, and required fields. Five differences is a separate implementation, not a quirks flag. |
 
 ## Cross-cutting, ongoing
 

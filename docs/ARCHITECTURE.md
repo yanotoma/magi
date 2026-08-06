@@ -16,8 +16,9 @@ This document describes how Magi is put together. For *why* each decision was ma
 │  └────────┬──────────┬──────────┬───────────┬──────────────────────┘  │
 │           │          │          │           │                          │
 │      audio/     stt/        capture/      llm/                         │
-│      cpal       whisper-rs  xcap          client · provider            │
-│                                           preflight · tools            │
+│      cpal       whisper-rs  xcap          provider · openai            │
+│                                           anthropic · preflight        │
+│                                           tools                        │
 │                                                                        │
 │  config.rs      TOML in OS config dir · secrets in OS keychain         │
 └────────────────────────────────┬───────────────────────────────────────┘
@@ -45,8 +46,9 @@ magi/
 │   │   ├── stt/             # whisper-rs wrapper, model management
 │   │   ├── capture/         # display & window capture (xcap)
 │   │   └── llm/
-│   │       ├── client.rs    # OpenAI-compatible HTTP client, streaming
-│   │       ├── provider.rs  # provider registry + per-provider quirks
+│   │       ├── provider.rs  # the Provider trait + registry
+│   │       ├── openai.rs    # OpenAI-compatible impl
+│   │       ├── anthropic.rs # Anthropic native impl
 │   │       ├── preflight.rs # capability probing → tier assignment
 │   │       └── tools.rs     # tool definitions, incl. capture_screen
 │   ├── capabilities/        # Tauri v2 permission files
@@ -71,7 +73,7 @@ Every module below the state machine is a **leaf**: it knows nothing about the a
 | `audio` | Open default input, buffer 16 kHz mono PCM while recording | `AudioSource` |
 | `stt` | PCM in, text out | `Transcriber` |
 | `capture` | Capture a display or window as PNG bytes | `ScreenCapture` |
-| `llm::client` | One turn in; streamed tokens and optional tool calls out | `LlmClient` |
+| `llm::provider` | One turn in; streamed tokens and optional tool calls out | `Provider` |
 | `llm::preflight` | Endpoint config in, capability tier out | — |
 | `session` | Owns the state machine and the thread | — |
 | `config` | Load, validate, persist | — |

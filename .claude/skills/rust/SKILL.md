@@ -20,7 +20,7 @@ Pinned in `rust-toolchain.toml` at the repo root. `rustup` honors it automatical
 | STT | `whisper-rs` | Bindings to whisper.cpp. Needs cmake at build time. Metal on macOS |
 | Wake word (v2) | `ort` | ONNX Runtime bindings, runs openWakeWord models |
 | Mouse/keyboard (v3) | `enigo` | Needs macOS Accessibility permission |
-| HTTP / LLM | `reqwest` + `tokio` | One OpenAI-compatible client covers Ollama, LM Studio, OpenAI, OpenRouter |
+| HTTP / LLM | `reqwest` + `tokio` | A `Provider` trait with two impls. "OpenAI-compatible" is a family, not a standard — Anthropic is outside it. See the `llm-providers` skill |
 | Errors | `thiserror` (libraries) + `anyhow` (top level) | See below |
 | Logging | `tracing` + `tracing-subscriber` | Structured; never `println!` in committed code |
 | Config | `serde` + `toml` | Config lives in the OS config dir, human-editable |
@@ -66,8 +66,9 @@ src-tauri/src/
 ├── audio/           # cpal input, resampling, VAD
 ├── stt/             # whisper-rs wrapper
 ├── llm/
-│   ├── client.rs    # OpenAI-compatible HTTP client
-│   ├── provider.rs  # provider registry + per-provider quirks
+│   ├── provider.rs  # the Provider trait + registry
+│   ├── openai.rs    # OpenAI-compatible impl
+│   ├── anthropic.rs # Anthropic native impl
 │   ├── preflight.rs # capability probing -> tier assignment
 │   └── tools.rs     # tool definitions incl. capture_screen
 └── session.rs       # conversation state machine
@@ -78,7 +79,7 @@ If `main.rs` grows past ~200 lines, something belongs in a module.
 ## Testing
 
 - Pure logic (config parsing, tier assignment, prompt assembly, deictic detection) gets unit tests. This is most of the interesting code.
-- Anything touching hardware or the network sits behind a trait so tests use a fake. `LlmClient`, `ScreenCapture`, and `Transcriber` are traits for exactly this reason.
+- Anything touching hardware or the network sits behind a trait so tests use a fake. `Provider`, `ScreenCapture`, and `Transcriber` are traits for exactly this reason.
 - No test may require a GPU, a microphone, a display, or a network connection. CI has none of them.
 
 ## Style

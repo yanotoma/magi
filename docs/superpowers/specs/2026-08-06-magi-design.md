@@ -34,7 +34,7 @@ Full Rust core with a Tauri v2 shell.
 | Screen capture | `xcap` |
 | Audio capture | `cpal` |
 | Speech-to-text | `whisper-rs` (whisper.cpp bindings) |
-| LLM transport | `reqwest` + `tokio`, custom OpenAI-compatible client |
+| LLM transport | `reqwest` + `tokio`; a `Provider` trait with two implementations |
 | Secrets | `keyring` (OS keychain) |
 | Config | `serde` + `toml` |
 | Logging | `tracing` |
@@ -152,8 +152,9 @@ The probes deliberately use throwaway inputs. Pre-flight never sends real screen
 │  └────────┬──────────┬──────────┬───────────┬──────────────────────┘  │
 │           │          │          │           │                          │
 │      audio/     stt/        capture/      llm/                         │
-│      cpal       whisper-rs  xcap          client · provider            │
-│                                           preflight · tools            │
+│      cpal       whisper-rs  xcap          provider · openai            │
+│                                           anthropic · preflight        │
+│                                           tools                        │
 │                                                                        │
 │  config.rs      TOML in OS config dir · secrets in OS keychain         │
 └────────────────────────────────┬───────────────────────────────────────┘
@@ -174,7 +175,7 @@ Each module is defined by a trait so it can be faked in tests and swapped later.
 | `audio` | Open the default input, buffer 16 kHz mono PCM while recording | `AudioSource` |
 | `stt` | PCM in, text out | `Transcriber` |
 | `capture` | Capture a display or window as PNG bytes | `ScreenCapture` |
-| `llm::client` | One turn in, streamed tokens plus optional tool calls out | `LlmClient` |
+| `llm::provider` | One turn in, streamed tokens plus optional tool calls out | `Provider` |
 | `llm::preflight` | Endpoint config in, capability tier out | — |
 | `session` | Owns the state machine and the thread; the only stateful module | — |
 | `config` | Load, validate, persist. Secrets via keychain, never in the TOML | — |
@@ -268,7 +269,7 @@ User-visible failures are classified and each has a defined surface:
 ## 11. Testing
 
 - **Unit tests** cover the logic that is actually subtle: config parsing and migration, tier assignment from probe results, deictic detection, prompt and history assembly, token-stream parsing.
-- **Fakes over mocks.** Each trait gets a hand-written fake. `FakeLlmClient` replays scripted turns including tool calls, which is how the agentic-vision path is tested without a model.
+- **Fakes over mocks.** Each trait gets a hand-written fake. `FakeProvider` replays scripted turns including tool calls, which is how the agentic-vision path is tested without a model.
 - **No test may require** a GPU, microphone, display, or network. CI has none of them. This constraint is what forced the trait boundaries, and it is worth defending.
 - **Manual test matrix** for the parts that cannot be automated: permission grant and denial paths, hotkey conflicts, multi-display capture, sleep/wake, and provider swap mid-thread.
 

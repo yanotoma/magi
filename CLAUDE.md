@@ -16,11 +16,15 @@ Use the project-local skills in `.claude/skills/`:
 
 | Skill | When |
 |---|---|
+| `rust` | Any Rust code |
 | `tauri-v2` | Any Tauri code — tray, hotkeys, windows, sidecars, capabilities |
 | `svelte-5` | Any Svelte component |
-| `rust` | Any Rust code |
+| `llm-providers` | Any provider, request-mapping, streaming, or pre-flight code |
+| `macos-permissions` | TCC permissions, Info.plist, signing, notarization |
 
-They exist because Tauri v1/v2 and Svelte 4/5 have incompatible APIs, and the older versions dominate training data. Do not rely on recalled knowledge for these three.
+They exist because these areas share one failure mode: **the wrong version or the wrong assumption is better represented in training data than the right one.** Tauri v1/v2 and Svelte 4/5 have incompatible APIs; "OpenAI-compatible" reads like a standard but Anthropic is outside it; macOS permissions fail with no error and no log. Do not rely on recalled knowledge in any of these five areas.
+
+`docs/TASKS.md` carries the roadmap for skills not yet written — each is authored when its milestone starts, so it does not go stale before use.
 
 Check documentation with the context7 MCP server rather than recalled knowledge for any library.
 
