@@ -6,3 +6,4 @@
 //! `.claude/skills/llm-providers/SKILL.md`.
 
 pub mod provider;
+pub mod sse;
