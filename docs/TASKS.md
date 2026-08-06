@@ -264,7 +264,8 @@ Recorded so they are not re-proposed.
 
 ## Cross-cutting, ongoing
 
-- [ ] CI: `cargo test`, `cargo clippy -D warnings`, `cargo fmt --check`, `svelte-check`
+- [x] CI: `cargo test`, `cargo clippy -D warnings`, `cargo fmt --check`, `svelte-check`
+- [ ] Split CI by what actually needs macOS. Everything currently runs on `macos-14`, but `cargo fmt`, `svelte-check`, and the task-count check are platform-independent — and macOS runners bill at a 10x minute multiplier and are markedly harder to get allocated (observed: two consecutive runs lost, one to a service outage and one to "job was not acquired by Runner of type hosted"). Move the platform-independent checks to `ubuntu-latest` and leave macOS for the build. Caveat: `cargo test` on Linux needs Tauri's webkit2gtk system dependencies, which is real work rather than a config line — but it would also prove the cross-platform claim is not vapour
 - [ ] Keep all tests free of GPU, microphone, display, and network dependencies
 - [ ] Windows packaging
 - [ ] Linux packaging
