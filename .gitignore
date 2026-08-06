@@ -6,9 +6,13 @@
 
 # Node
 node_modules/
+*.tsbuildinfo
+
+# SvelteKit / Vite build output
+/build
+.svelte-kit/
 dist/
 .vite/
-*.tsbuildinfo
 
 # Tauri
 /src-tauri/gen/

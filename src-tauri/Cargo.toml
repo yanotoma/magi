@@ -1,0 +1,28 @@
+[package]
+name = "magi"
+version = "0.1.0"
+description = "A background AI agent for your desktop"
+authors = ["The Magi contributors"]
+license = "Apache-2.0"
+repository = "https://github.com/yanotoma/magi"
+edition = "2021"
+
+[lib]
+# `main.rs` is a three-line entry point; `lib.rs` is the composition root.
+# The split is deliberate: integration tests under `tests/` cannot import from a
+# binary-only crate, and Magi's testable logic lives in modules beside `lib.rs`.
+# The `_lib` suffix keeps the library name from colliding with the binary on Windows.
+# See https://github.com/rust-lang/cargo/issues/8519
+name = "magi_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+toml = "0.8"
