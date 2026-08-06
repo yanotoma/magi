@@ -40,6 +40,13 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      - name: Check task counts
+        # docs/TASKS.md states each task twice — as a checkbox and as a count in
+        # the summary table. Hand-maintained counts drift on the first change
+        # someone forgets to mirror, and nobody recounts 120 checkboxes to
+        # notice. Derive the table instead of trusting it.
+        run: python3 tools/task_counts.py --check
+
       - name: Check formatting
         run: cargo fmt --all --check
         working-directory: src-tauri

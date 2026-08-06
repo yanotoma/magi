@@ -5,7 +5,7 @@ Complete breakdown of what is done and what is pending, across every milestone.
 **Last updated:** 2026-08-06
 **Current phase:** M1 shipped as `0.1.0-alpha.1`; M2 next
 **Current version:** `0.1.0-alpha.1` (unreleased — see [VERSIONING.md](VERSIONING.md))
-**Overall:** 30 / 130 tasks done (23%)
+**Overall:** 30 / 134 tasks done (22%)
 
 Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 
@@ -18,12 +18,12 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 | **M0** | Foundations | — | 15 | 15 | ✅ Complete |
 | **M1** | Shell — tray, hotkey, windows | `0.1.0-alpha.1` | 15 | 16 | ✅ Shipped |
 | **M2** | Config & providers | `0.2.0-alpha.1` | 0 | 18 | ⬜ |
-| **M3** | Pre-flight & capability tiers | `0.2.0-alpha.1` | 0 | 11 | ⬜ |
+| **M3** | Pre-flight & capability tiers | `0.2.0-alpha.1` | 0 | 14 | ⬜ |
 | **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 0 | 14 | ⬜ |
 | **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 0 | 13 | ⬜ |
 | **M6** | Session machine & panel UX | `0.5.0-beta.1` | 0 | 16 | ⬜ |
-| **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 15 | ⬜ |
-| — | **v1 total** | `1.0.0` | **30** | **116** | |
+| **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 14 | ⬜ |
+| — | **v1 total** | `1.0.0` | **30** | **120** | |
 | **M8** | v2 — wake word & TTS | `1.1.0` | 0 | 9 | 🔮 Post-v1 |
 | **M9** | v3 — computer use | `1.2.0` | 0 | 5 | 🔮 Post-v1 |
 
