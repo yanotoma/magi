@@ -14,7 +14,7 @@ Named after the three-way supercomputer from *Neon Genesis Evangelion*.
 
 ---
 
-> **Pre-alpha.** The design is settled and documented; implementation has not started. See [docs/TASKS.md](docs/TASKS.md) for exactly what is done and what is pending.
+> **`0.1.0-alpha.1` — unreleased.** The design is settled and documented; implementation has not started, and there is nothing to download yet. See [docs/TASKS.md](docs/TASKS.md) for exactly what is done and what is pending, and [docs/VERSIONING.md](docs/VERSIONING.md) for the release train.
 
 ## What it does
 
@@ -97,6 +97,7 @@ Every crate chosen is cross-platform. macOS ships first because it is the hardes
 | [Design specification](docs/superpowers/specs/2026-08-06-magi-design.md) | The full design and the reasoning behind each decision |
 | [Architecture](docs/ARCHITECTURE.md) | Module map, contracts, data flow |
 | [Tasks](docs/TASKS.md) | Complete done/pending breakdown across all milestones |
+| [Versioning](docs/VERSIONING.md) | What the version number promises, and the release train |
 | [Contributing](CONTRIBUTING.md) | How to get set up and what a good PR looks like |
 
 ## Contributing

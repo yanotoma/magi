@@ -38,6 +38,16 @@ Check documentation with the context7 MCP server rather than recalled knowledge 
 
 `session.rs` is the only module that knows about the others. `audio`, `stt`, `capture`, and `llm` are leaves that know nothing about the application, each behind a trait. Preserve this — it is what makes the no-hardware-in-CI constraint achievable.
 
+## Versioning
+
+Semver, starting at `0.1.0-alpha.1`. Read [`docs/VERSIONING.md`](docs/VERSIONING.md) before bumping anything.
+
+The public contract is exactly four surfaces: the `config.toml` schema, the Tauri `invoke` commands, the `magi://*` events, and documented user-facing behavior. A change is breaking only if it requires the user to act. Internal module structure and crate choices are not part of the contract.
+
+`package.json` is the single source of truth for the version; `tauri.conf.json` points at it.
+
 ## Keep docs in sync
 
 `docs/TASKS.md` is the source of truth for status. Tick tasks in the same PR that implements them, and update the counts in the summary table.
+
+`CHANGELOG.md` gets every user-visible change in the same PR that makes it. Reconstructing a changelog from git history afterwards produces a list of commits, not a list of changes users care about.

@@ -4,7 +4,8 @@ Complete breakdown of what is done and what is pending, across every milestone.
 
 **Last updated:** 2026-08-06
 **Current phase:** M0 complete, M1 not started
-**Overall:** 12 / 118 tasks done (10%) — all foundational
+**Current version:** `0.1.0-alpha.1` (unreleased — see [VERSIONING.md](VERSIONING.md))
+**Overall:** 13 / 124 tasks done (10%) — all foundational
 
 Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 
@@ -12,19 +13,19 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 
 ## Status at a glance
 
-| Milestone | Scope | Done | Total | Status |
-|---|---|---:|---:|---|
-| **M0** | Foundations | 12 | 12 | ✅ Complete |
-| **M1** | Shell — tray, hotkey, windows | 0 | 14 | ⬜ Next |
-| **M2** | Config & providers | 0 | 13 | ⬜ |
-| **M3** | Pre-flight & capability tiers | 0 | 11 | ⬜ |
-| **M4** | Audio & speech-to-text | 0 | 14 | ⬜ |
-| **M5** | Screen capture & agentic vision | 0 | 13 | ⬜ |
-| **M6** | Session machine & panel UX | 0 | 15 | ⬜ |
-| **M7** | Packaging & macOS release | 0 | 12 | ⬜ |
-| — | **v1 total** | **12** | **104** | |
-| **M8** | v2 — wake word & TTS | 0 | 9 | 🔮 Post-v1 |
-| **M9** | v3 — computer use | 0 | 5 | 🔮 Post-v1 |
+| Milestone | Scope | Target version | Done | Total | Status |
+|---|---|---|---:|---:|---|
+| **M0** | Foundations | — | 13 | 13 | ✅ Complete |
+| **M1** | Shell — tray, hotkey, windows | `0.1.0-alpha.1` | 0 | 16 | ⬜ Next |
+| **M2** | Config & providers | `0.2.0-alpha.1` | 0 | 13 | ⬜ |
+| **M3** | Pre-flight & capability tiers | `0.2.0-alpha.1` | 0 | 11 | ⬜ |
+| **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 0 | 14 | ⬜ |
+| **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 0 | 13 | ⬜ |
+| **M6** | Session machine & panel UX | `0.5.0-beta.1` | 0 | 15 | ⬜ |
+| **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 15 | ⬜ |
+| — | **v1 total** | `1.0.0` | **13** | **110** | |
+| **M8** | v2 — wake word & TTS | `1.1.0` | 0 | 9 | 🔮 Post-v1 |
+| **M9** | v3 — computer use | `1.2.0` | 0 | 5 | 🔮 Post-v1 |
 
 ---
 
@@ -42,6 +43,7 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 - [x] Write `CONTRIBUTING.md`
 - [x] Create project-local Claude skills (`rust`, `tauri-v2`, `svelte-5`)
 - [x] Choose license (Apache-2.0, for the explicit patent grant)
+- [x] Define the versioning policy and release train (`docs/VERSIONING.md`, `CHANGELOG.md`)
 
 ---
 
@@ -54,6 +56,8 @@ The tray app exists, the hotkey works, the windows appear. No intelligence yet.
 - [ ] Scaffold the Tauri v2 project with the Svelte 5 + TypeScript + Vite template
 - [ ] Configure `.gitignore` for Rust, Node, and Tauri build artifacts
 - [ ] Set up `cargo fmt` and `cargo clippy -- -D warnings` in CI
+- [ ] Set the version to `0.1.0-alpha.1` in `package.json`, with `tauri.conf.json > version` pointing at `"../package.json"` so there is one source of truth
+- [ ] CI check asserting `Cargo.toml` and `package.json` versions agree
 
 **Tray**
 - [ ] `tray.rs` — tray icon with menu (Open, Settings, Quit) using `TrayIconBuilder`
@@ -180,7 +184,9 @@ The tray app exists, the hotkey works, the windows appear. No intelligence yet.
 - [ ] Code signing with a Developer ID certificate
 - [ ] Notarization and stapling
 - [ ] DMG with a drag-to-Applications layout
-- [ ] GitHub Actions release workflow
+- [ ] Verify how each bundle format handles pre-release identifiers (`-alpha.1`); adopt a monotonic build number if they are dropped
+- [ ] GitHub Actions release workflow triggered by `v*` tags, marking pre-release versions as GitHub pre-releases
+- [ ] Keep `CHANGELOG.md` current — every user-visible change lands in `Unreleased` in the same PR
 - [ ] Auto-update via `tauri-plugin-updater`
 - [ ] First-run onboarding: permissions walkthrough, model choice, provider setup
 - [ ] Measure and publish idle RAM and CPU (the headline claim needs a number behind it)
