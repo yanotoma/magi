@@ -60,7 +60,8 @@ Long operations stream progress back to the UI with `app.emit("magi://...", payl
 
 ```
 src-tauri/src/
-├── main.rs          # thin: builder, plugins, tray, shortcut registration
+├── main.rs          # three-line entry point: calls magi_lib::run()
+├── lib.rs           # composition root: builder, plugins, tray, shortcut registration
 ├── config.rs        # load/save/validate user config
 ├── capture/         # screen + window capture (xcap)
 ├── audio/           # cpal input, resampling, VAD
@@ -74,7 +75,13 @@ src-tauri/src/
 └── session.rs       # conversation state machine
 ```
 
-If `main.rs` grows past ~200 lines, something belongs in a module.
+If `lib.rs` grows past ~200 lines, something belongs in a module.
+
+**Why the `main.rs` / `lib.rs` split.** The Tauri template ships it for mobile
+support, which Magi will never target — but it is kept for a different reason:
+integration tests under `src-tauri/tests/` cannot import from a binary-only
+crate. Read `lib.rs` to understand what the app does at startup; `main.rs` has
+nothing in it.
 
 ## Testing
 

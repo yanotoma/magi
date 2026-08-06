@@ -1,6 +1,6 @@
 # Contributing to Magi
 
-Magi is pre-alpha. The design is settled and documented; implementation has not started.
+Magi is pre-alpha. The desktop shell exists — tray, global hotkey, two windows — and there is no intelligence behind it yet.
 
 That makes this an unusually good moment to contribute. **Architectural feedback is cheaper to act on now than it will ever be again.** If you disagree with something in the [design spec](docs/superpowers/specs/2026-08-06-magi-design.md), an issue arguing the case is more valuable right now than a patch.
 
@@ -21,7 +21,7 @@ Pick something from `TASKS.md` and comment on the tracking issue before you star
 
 | | |
 |---|---|
-| Rust | Installed via [`rustup`](https://rustup.rs). The version is pinned in `rust-toolchain.toml` and applied automatically — you do not need to switch it manually. |
+| Rust | Installed via [`rustup`](https://rustup.rs). The version is pinned in `rust-toolchain.toml` and applied automatically — you do not need to switch it manually. **On macOS, check the PATH line landed in a file zsh reads** — see below. |
 | Node | 20+ |
 | cmake | Required to build whisper.cpp. `brew install cmake` |
 | macOS | Xcode Command Line Tools |
@@ -33,13 +33,25 @@ npm install
 npm run tauri dev
 ```
 
+**If that fails with `failed to run 'cargo metadata'` / `No such file or directory`,**
+`cargo` is installed but not on your `PATH`. rustup appends its PATH line to the
+shell profiles it detects, and on macOS it may write only `~/.profile` — which
+**zsh does not read**, and zsh is the default shell. The binary is fine; the
+wiring is not. Fix it once:
+
+```bash
+grep -q 'cargo/env' ~/.zshrc || echo '. "$HOME/.cargo/env"' >> ~/.zshrc
+source ~/.cargo/env   # for the shell you already have open
+```
+
 ## Working with an AI assistant
 
-This repo ships project-local skills in `.claude/skills/` for Rust, Tauri v2, and Svelte 5. They exist because all three have a specific failure mode: **search results and model training data mix incompatible versions.**
+This repo ships project-local skills in `.claude/skills/` for Rust, Tauri v2, Svelte 5, LLM providers, and macOS permissions. They exist because these areas share one failure mode: **the wrong version or the wrong assumption is better represented in training data than the right one.**
 
 - Tauri v1's `SystemTray` and v2's `TrayIconBuilder` are unrelated APIs
 - Svelte 4's `$:` reactivity and Svelte 5 runes are unrelated APIs
-- Both older versions are far better represented in training data than the current ones
+- "OpenAI-compatible" reads like a standard, but Anthropic's API is outside it
+- macOS permissions fail with no error and no log entry
 
 The skills pin the correct version and annotate the traps. If you use Claude Code, they load automatically. If you use another assistant, read them yourself — they are plain Markdown and the traps are real.
 
@@ -66,7 +78,7 @@ Adding one is a design decision, not a detail. Justify it in the PR description.
 
 **No test may require a GPU, microphone, display, or network.** CI has none of them.
 
-This is why every hardware- or network-touching module sits behind a trait with a hand-written fake. `FakeLlmClient` replays scripted turns including tool calls — that is how the agentic-vision path gets tested without a model.
+This is why every hardware- or network-touching module sits behind a trait with a hand-written fake. `FakeProvider` replays scripted turns including tool calls — that is how the agentic-vision path gets tested without a model.
 
 If you find yourself wanting to relax this constraint, the design is probably wrong somewhere. Open an issue about the design instead.
 

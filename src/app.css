@@ -1,0 +1,11 @@
+/*
+  The panel window is transparent at the OS level. If html or body paint a
+  background, that transparency is invisible — the page simply covers it. Each
+  route draws its own surface instead.
+*/
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+}

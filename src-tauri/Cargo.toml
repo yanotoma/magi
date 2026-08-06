@@ -1,0 +1,35 @@
+[package]
+name = "magi"
+version = "0.1.0-alpha.1"
+description = "A background AI agent for your desktop"
+authors = ["The Magi contributors"]
+license = "Apache-2.0"
+repository = "https://github.com/yanotoma/magi"
+edition = "2021"
+
+[lib]
+# `main.rs` is a three-line entry point; `lib.rs` is the composition root.
+# The split is deliberate: integration tests under `tests/` cannot import from a
+# binary-only crate, and Magi's testable logic lives in modules beside `lib.rs`.
+# The `_lib` suffix keeps the library name from colliding with the binary on Windows.
+# See https://github.com/rust-lang/cargo/issues/8519
+name = "magi_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# macos-private-api is required for the transparent overlay panel. It permanently
+# blocks Mac App Store distribution — a deliberate tradeoff; Magi ships a signed
+# DMG directly. See .claude/skills/macos-permissions/SKILL.md.
+tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
+tauri-plugin-global-shortcut = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+toml = "0.8"
