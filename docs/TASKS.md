@@ -3,9 +3,9 @@
 Complete breakdown of what is done and what is pending, across every milestone.
 
 **Last updated:** 2026-08-06
-**Current phase:** M0 complete, M1 not started
+**Current phase:** M1 in progress (scaffold done)
 **Current version:** `0.1.0-alpha.1` (unreleased — see [VERSIONING.md](VERSIONING.md))
-**Overall:** 15 / 129 tasks done (12%) — all foundational
+**Overall:** 18 / 130 tasks done (14%)
 
 Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 
@@ -16,14 +16,14 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 | Milestone | Scope | Target version | Done | Total | Status |
 |---|---|---|---:|---:|---|
 | **M0** | Foundations | — | 15 | 15 | ✅ Complete |
-| **M1** | Shell — tray, hotkey, windows | `0.1.0-alpha.1` | 0 | 16 | ⬜ Next |
-| **M2** | Config & providers | `0.2.0-alpha.1` | 0 | 16 | ⬜ |
+| **M1** | Shell — tray, hotkey, windows | `0.1.0-alpha.1` | 3 | 16 | 🔨 In progress |
+| **M2** | Config & providers | `0.2.0-alpha.1` | 0 | 17 | ⬜ |
 | **M3** | Pre-flight & capability tiers | `0.2.0-alpha.1` | 0 | 11 | ⬜ |
 | **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 0 | 14 | ⬜ |
 | **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 0 | 13 | ⬜ |
 | **M6** | Session machine & panel UX | `0.5.0-beta.1` | 0 | 15 | ⬜ |
 | **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 15 | ⬜ |
-| — | **v1 total** | `1.0.0` | **15** | **115** | |
+| — | **v1 total** | `1.0.0` | **18** | **116** | |
 | **M8** | v2 — wake word & TTS | `1.1.0` | 0 | 9 | 🔮 Post-v1 |
 | **M9** | v3 — computer use | `1.2.0` | 0 | 5 | 🔮 Post-v1 |
 
@@ -54,9 +54,9 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 The tray app exists, the hotkey works, the windows appear. No intelligence yet.
 
 **Setup**
-- [ ] Install `rustup` and pin the toolchain in `rust-toolchain.toml`
-- [ ] Scaffold the Tauri v2 project with the Svelte 5 + TypeScript + Vite template
-- [ ] Configure `.gitignore` for Rust, Node, and Tauri build artifacts
+- [x] Install `rustup` and pin the toolchain in `rust-toolchain.toml`
+- [x] Scaffold the Tauri v2 project (the `svelte-ts` template is SvelteKit + Svelte 5; kept, so each window loads its own route)
+- [x] Configure `.gitignore` for Rust, Node, SvelteKit, and Tauri build artifacts
 - [ ] Set up `cargo fmt` and `cargo clippy -- -D warnings` in CI
 - [ ] Set the version to `0.1.0-alpha.1` in `package.json`, with `tauri.conf.json > version` pointing at `"../package.json"` so there is one source of truth
 - [ ] CI check asserting `Cargo.toml` and `package.json` versions agree
@@ -87,8 +87,9 @@ The tray app exists, the hotkey works, the windows appear. No intelligence yet.
 - [ ] Write defaults on first run
 - [ ] Store and retrieve API keys via `keyring`, never in the TOML
 - [ ] Optional OAuth sign-in for Anthropic as an alternative to a pasted key (`Authorization: Bearer` + `anthropic-beta: oauth-2025-04-20`, short-lived tokens, refresh handling). Still billed as API usage — it removes key-pasting friction, not cost
-- [ ] `llm::provider` — provider registry (id, kind, base URL, model, tier)
+- [ ] Provider registry — id, kind, base URL, model, resolved tier
 - [ ] Built-in presets for Ollama, LM Studio, OpenAI, Anthropic, OpenRouter
+- [ ] Custom OpenAI-compatible endpoint as a first-class option (base URL + model + optional key) — a missing preset must never be a wall. Any endpoint speaking the OpenAI chat-completions shape works; pre-flight reports what it can actually do
 - [ ] `llm::provider` — the `Provider` trait; internal turn types are provider-neutral
 - [ ] `llm::openai` — OpenAI-compatible impl (Ollama, LM Studio, OpenAI, OpenRouter)
 - [ ] `llm::anthropic` — Anthropic native impl (x-api-key, top-level system, input_schema, base64 image source)
