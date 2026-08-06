@@ -4,6 +4,7 @@
 //! together here, so there is one place to read to understand what happens at
 //! startup.
 
+pub mod config;
 pub mod error;
 pub mod hotkey;
 pub mod tray;

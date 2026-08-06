@@ -34,8 +34,10 @@ tauri-plugin-window-state = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
+toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
-toml = "0.8"
+# Config tests write to a throwaway directory rather than the real config dir.
+tempfile = "3"
