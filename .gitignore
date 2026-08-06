@@ -1,0 +1,43 @@
+# Rust
+/target
+/src-tauri/target
+**/*.rs.bk
+*.pdb
+
+# Node
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# Tauri
+/src-tauri/gen/
+/src-tauri/binaries/
+/src-tauri/WixTools/
+
+# Models — downloaded at runtime, never committed
+*.bin
+*.gguf
+*.onnx
+/models/
+
+# Secrets — API keys belong in the OS keychain, never on disk
+.env
+.env.*
+!.env.example
+
+# macOS
+.DS_Store
+*.dmg
+
+# Claude Code local overrides — skills in .claude/skills/ ARE committed
+.claude/settings.local.json
+
+# Editors
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+
+# Logs
+*.log
