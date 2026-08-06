@@ -4,6 +4,8 @@
 //! in an editor and pasted into bug reports, which is why API keys are not in it
 //! — see [`secrets`](crate::config::secrets).
 
+pub mod secrets;
+
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
