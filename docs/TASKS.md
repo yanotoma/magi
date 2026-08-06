@@ -5,7 +5,7 @@ Complete breakdown of what is done and what is pending, across every milestone.
 **Last updated:** 2026-08-06
 **Current phase:** M1 in progress (scaffold done)
 **Current version:** `0.1.0-alpha.1` (unreleased — see [VERSIONING.md](VERSIONING.md))
-**Overall:** 18 / 130 tasks done (14%)
+**Overall:** 21 / 130 tasks done (16%)
 
 Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 
@@ -16,14 +16,14 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 | Milestone | Scope | Target version | Done | Total | Status |
 |---|---|---|---:|---:|---|
 | **M0** | Foundations | — | 15 | 15 | ✅ Complete |
-| **M1** | Shell — tray, hotkey, windows | `0.1.0-alpha.1` | 3 | 16 | 🔨 In progress |
+| **M1** | Shell — tray, hotkey, windows | `0.1.0-alpha.1` | 6 | 16 | 🔨 In progress |
 | **M2** | Config & providers | `0.2.0-alpha.1` | 0 | 17 | ⬜ |
 | **M3** | Pre-flight & capability tiers | `0.2.0-alpha.1` | 0 | 11 | ⬜ |
 | **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 0 | 14 | ⬜ |
 | **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 0 | 13 | ⬜ |
 | **M6** | Session machine & panel UX | `0.5.0-beta.1` | 0 | 15 | ⬜ |
 | **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 15 | ⬜ |
-| — | **v1 total** | `1.0.0` | **18** | **116** | |
+| — | **v1 total** | `1.0.0` | **21** | **116** | |
 | **M8** | v2 — wake word & TTS | `1.1.0` | 0 | 9 | 🔮 Post-v1 |
 | **M9** | v3 — computer use | `1.2.0` | 0 | 5 | 🔮 Post-v1 |
 
@@ -57,9 +57,9 @@ The tray app exists, the hotkey works, the windows appear. No intelligence yet.
 - [x] Install `rustup` and pin the toolchain in `rust-toolchain.toml`
 - [x] Scaffold the Tauri v2 project (the `svelte-ts` template is SvelteKit + Svelte 5; kept, so each window loads its own route)
 - [x] Configure `.gitignore` for Rust, Node, SvelteKit, and Tauri build artifacts
-- [ ] Set up `cargo fmt` and `cargo clippy -- -D warnings` in CI
-- [ ] Set the version to `0.1.0-alpha.1` in `package.json`, with `tauri.conf.json > version` pointing at `"../package.json"` so there is one source of truth
-- [ ] CI check asserting `Cargo.toml` and `package.json` versions agree
+- [x] Set up `cargo fmt` and `cargo clippy -- -D warnings` in CI
+- [x] Set the version to `0.1.0-alpha.1` in `package.json`, with `tauri.conf.json > version` pointing at `"../package.json"` so there is one source of truth
+- [x] CI check asserting `Cargo.toml` and `package.json` versions agree
 
 **Tray**
 - [ ] `tray.rs` — tray icon with menu (Open, Settings, Quit) using `TrayIconBuilder`

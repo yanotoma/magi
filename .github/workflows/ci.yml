@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push to the same branch makes the in-flight run obsolete.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    # macOS is Magi's only supported target for v1. Windows and Linux runners
+    # are added in M7 alongside their packaging.
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        # rust-toolchain.toml pins the version, components, and targets.
+        # `rustup show` installs whatever it asks for; there is deliberately no
+        # toolchain argument here, so CI can never disagree with local builds.
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+        working-directory: src-tauri
+
+      - name: Lint
+        run: cargo clippy --all-targets -- -D warnings
+        working-directory: src-tauri
+
+      - name: Test
+        # Covers the version-drift guard and every module unit test. No test may
+        # require a GPU, microphone, display, or network — the runner has none.
+        run: cargo test
+        working-directory: src-tauri
+
+      - name: Typecheck frontend
+        run: npm run check
+
+      - name: Build
+        # --no-bundle keeps CI off signing and notarization, which arrive in M7.
+        # The build still catches compile errors that `cargo test` would miss,
+        # because it compiles the release profile and the frontend together.
+        run: npm run tauri build -- --no-bundle
