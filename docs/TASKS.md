@@ -3,7 +3,7 @@
 Complete breakdown of what is done and what is pending, across every milestone.
 
 **Last updated:** 2026-08-06
-**Current phase:** M1 code complete; manual verification pending before tagging `0.1.0-alpha.1`
+**Current phase:** M1 shipped as `0.1.0-alpha.1`; M2 next
 **Current version:** `0.1.0-alpha.1` (unreleased — see [VERSIONING.md](VERSIONING.md))
 **Overall:** 30 / 130 tasks done (23%)
 
@@ -16,7 +16,7 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 | Milestone | Scope | Target version | Done | Total | Status |
 |---|---|---|---:|---:|---|
 | **M0** | Foundations | — | 15 | 15 | ✅ Complete |
-| **M1** | Shell — tray, hotkey, windows | `0.1.0-alpha.1` | 15 | 16 | 🔨 Awaiting manual verification |
+| **M1** | Shell — tray, hotkey, windows | `0.1.0-alpha.1` | 15 | 16 | ✅ Shipped |
 | **M2** | Config & providers | `0.2.0-alpha.1` | 0 | 17 | ⬜ |
 | **M3** | Pre-flight & capability tiers | `0.2.0-alpha.1` | 0 | 11 | ⬜ |
 | **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 0 | 14 | ⬜ |
@@ -49,9 +49,13 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 
 ---
 
-## M1 — Shell
+## M1 — Shell ✅
 
 The tray app exists, the hotkey works, the windows appear. No intelligence yet.
+
+Manually verified on macOS: tray icon present, no Dock or app-switcher entry, `Alt+Space` toggles the panel once per press, the panel is transparent and undecorated, right-click opens the menu, and closing Settings does not quit the app.
+
+One task is carried into M3/M4/M6 rather than done here — see the note on the tray icon below.
 
 **Setup**
 - [x] Install `rustup` and pin the toolchain in `rust-toolchain.toml`
