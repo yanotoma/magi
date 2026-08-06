@@ -5,7 +5,7 @@ Complete breakdown of what is done and what is pending, across every milestone.
 **Last updated:** 2026-08-06
 **Current phase:** M1 shipped as `0.1.0-alpha.1`; M2 next
 **Current version:** `0.1.0-alpha.1` (unreleased — see [VERSIONING.md](VERSIONING.md))
-**Overall:** 30 / 134 tasks done (22%)
+**Overall:** 30 / 139 tasks done (22%)
 
 Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 
@@ -17,13 +17,13 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 |---|---|---|---:|---:|---|
 | **M0** | Foundations | — | 15 | 15 | ✅ Complete |
 | **M1** | Shell — tray, hotkey, windows | `0.1.0-alpha.1` | 15 | 16 | ✅ Shipped |
-| **M2** | Config & providers | `0.2.0-alpha.1` | 0 | 18 | ⬜ |
+| **M2** | Config & providers | `0.2.0-alpha.1` | 0 | 23 | ⬜ |
 | **M3** | Pre-flight & capability tiers | `0.2.0-alpha.1` | 0 | 14 | ⬜ |
 | **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 0 | 14 | ⬜ |
 | **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 0 | 13 | ⬜ |
 | **M6** | Session machine & panel UX | `0.5.0-beta.1` | 0 | 16 | ⬜ |
 | **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 14 | ⬜ |
-| — | **v1 total** | `1.0.0` | **30** | **120** | |
+| — | **v1 total** | `1.0.0` | **30** | **125** | |
 | **M8** | v2 — wake word & TTS | `1.1.0` | 0 | 9 | 🔮 Post-v1 |
 | **M9** | v3 — computer use | `1.2.0` | 0 | 5 | 🔮 Post-v1 |
 
@@ -85,6 +85,10 @@ One task is carried into M3/M4/M6 rather than done here — see the note on the 
 
 ## M2 — Config & providers
 
+Ends with a working text loop: type in the panel, watch the answer stream back. No voice, no capture, no state machine.
+
+The milestone was widened from pure infrastructure for one reason: with the original plan nothing worked until M6, and streaming into the UI is where the surprises live — split SSE frames, backpressure, cancellation. Finding those against a local model in M2 costs hours; finding them in M6 under four other subsystems costs days of working out which one is at fault.
+
 - [ ] `config.rs` — TOML schema with `serde`, loaded from the OS config dir
 - [ ] Config validation with actionable error messages, not just parse failures
 - [ ] Config versioning and a migration path (needed before the first public release, not after)
@@ -100,6 +104,11 @@ One task is carried into M3/M4/M6 rather than done here — see the note on the 
 - [ ] Server-sent-event streaming with incremental token emission
 - [ ] Defensive SSE parsing — local backends split frames and omit terminators
 - [ ] `FakeProvider` for tests, replaying scripted turns including tool calls
+- [ ] SSE parsing as a pure function with recorded fixtures, replayed at hostile chunk sizes (1 byte, 3 bytes, whole body) so the split-frame path is exercised rather than assumed
+- [ ] Tauri commands `send_text_turn`, `get_config`, `set_config`; events `magi://token`, `magi://turn-done`, `magi://error`
+- [ ] Cancellation — dismissing the panel aborts an in-flight request instead of letting it finish into a dropped receiver
+- [ ] Panel: text input and streaming answer, growing to a max height then scrolling
+- [ ] Inline errors naming the provider and the resolved URL — "connection refused" is useless without knowing what it tried to reach
 - [ ] Settings UI — provider list with add / edit / remove
 - [ ] Settings UI — hotkey capture control
 - [ ] `[prompt] context` in `config.toml` — free text appended to Magi's system prompt. **Additive, never a replacement**: Magi's own instructions carry the contract that makes agentic capture fire, and letting a user overwrite them breaks tier 1 silently
