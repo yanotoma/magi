@@ -5,6 +5,7 @@
 //! startup.
 
 pub mod error;
+pub mod hotkey;
 pub mod tray;
 pub mod windows;
 
@@ -19,6 +20,7 @@ pub fn run() {
     init_tracing();
 
     tauri::Builder::default()
+        .plugin(hotkey::plugin())
         .setup(|app| {
             // Magi is a background agent: no Dock icon, no app-switcher entry.
             // `skipTaskbar` in the window config does not do this on macOS — it
@@ -27,6 +29,14 @@ pub fn run() {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             tray::init(app)?;
+
+            // A shortcut conflict must not prevent startup. The tray icon is
+            // still a working way in, and killing launch over a hotkey clash
+            // would leave the user with no entry point at all.
+            if let Err(error) = hotkey::register_default(app.handle()) {
+                tracing::warn!(%error, "continuing without a global shortcut");
+            }
+
             Ok(())
         })
         .on_window_event(|window, event| {
