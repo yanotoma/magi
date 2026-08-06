@@ -40,6 +40,12 @@ pub enum ConfigError {
          entry holding each provider's API key, so duplicates would share one secret."
     )]
     DuplicateProviderId(String),
+
+    #[error("the selected provider '{0}' is not configured")]
+    UnknownActiveProvider(String),
+
+    #[error("provider '{provider}' has no model named '{model}'")]
+    UnknownActiveModel { provider: String, model: String },
 }
 
 /// How a provider speaks, which decides which implementation handles it.
@@ -62,11 +68,31 @@ pub struct ProviderConfig {
     pub id: String,
     pub kind: ProviderKind,
     pub base_url: String,
-    pub model: String,
+
+    /// Models reachable at this endpoint.
+    ///
+    /// A list rather than a single name because one endpoint routinely serves
+    /// many: OpenRouter exposes hundreds, Ollama whatever has been pulled. It
+    /// may be empty when a provider has just been added and its models have not
+    /// been discovered yet — such a provider simply cannot be the active one.
+    #[serde(default)]
+    pub models: Vec<String>,
 
     /// Whether this provider needs a key at all. Ollama and LM Studio do not.
     #[serde(default)]
     pub requires_key: bool,
+}
+
+/// Which model is in use.
+///
+/// A pair rather than a single id because capability tiers are a property of
+/// the model, not the endpoint: the same OpenRouter key reaches models that can
+/// see images and models that cannot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActiveModel {
+    pub provider: String,
+    pub model: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,6 +118,10 @@ pub struct Config {
     #[serde(default)]
     pub hotkey: HotkeyConfig,
 
+    /// The provider and model a turn goes to. `None` until one is chosen.
+    #[serde(default)]
+    pub active: Option<ActiveModel>,
+
     /// `[[provider]]` in the file; plural in code.
     #[serde(default, rename = "provider")]
     pub providers: Vec<ProviderConfig>,
@@ -108,6 +138,7 @@ impl Default for Config {
         Self {
             schema_version: CURRENT_SCHEMA_VERSION,
             hotkey: HotkeyConfig::default(),
+            active: None,
             providers: Vec::new(),
         }
     }
@@ -145,7 +176,34 @@ impl Config {
                 return Err(ConfigError::DuplicateProviderId(provider.id.clone()));
             }
         }
+
+        // A dangling selection is worth catching here rather than at send time.
+        // Removing a model from a provider and forgetting the selection is easy
+        // to do by hand, and the failure it causes otherwise — a request for a
+        // model the endpoint has never heard of — reads as a server problem.
+        if let Some(active) = &self.active {
+            let provider = self
+                .providers
+                .iter()
+                .find(|p| p.id == active.provider)
+                .ok_or_else(|| ConfigError::UnknownActiveProvider(active.provider.clone()))?;
+
+            if !provider.models.contains(&active.model) {
+                return Err(ConfigError::UnknownActiveModel {
+                    provider: active.provider.clone(),
+                    model: active.model.clone(),
+                });
+            }
+        }
+
         Ok(())
+    }
+
+    /// The active provider and model, if one is selected and still valid.
+    pub fn active_provider(&self) -> Option<(&ProviderConfig, &str)> {
+        let active = self.active.as_ref()?;
+        let provider = self.providers.iter().find(|p| p.id == active.provider)?;
+        Some((provider, active.model.as_str()))
     }
 
     /// Reads `config.toml` from `dir`. A missing file yields defaults.
@@ -203,7 +261,7 @@ mod tests {
             [[provider]]
             id = "local"
             kind = "openai-compatible"
-            model = "qwen2.5"
+            models = ["qwen2.5"]
             "#,
         );
         assert!(result.is_err(), "base_url is required");
@@ -221,7 +279,7 @@ mod tests {
             id = "openai"
             kind = "openai-compatible"
             base_url = "https://api.openai.com/v1"
-            model = "gpt-4o"
+            models = ["gpt-4o"]
             api_key = "sk-oops"
             "#,
         );
@@ -239,7 +297,7 @@ mod tests {
             id = "local"
             kind = "openai-compatible"
             base_ur = "http://localhost:11434/v1"
-            model = "qwen2.5"
+            models = ["qwen2.5"]
             "#,
         );
         assert!(result.is_err(), "base_ur is a typo, not a new field");
@@ -277,16 +335,94 @@ mod tests {
             id = "local"
             kind = "openai-compatible"
             base_url = "http://localhost:11434/v1"
-            model = "a"
+            models = ["a"]
 
             [[provider]]
             id = "local"
             kind = "openai-compatible"
             base_url = "http://localhost:1234/v1"
-            model = "b"
+            models = ["b"]
             "#,
         );
         assert!(matches!(result, Err(ConfigError::DuplicateProviderId(_))));
+    }
+
+    #[test]
+    fn one_provider_can_host_many_models() {
+        // The common case, not an edge case: OpenRouter serves hundreds behind
+        // one endpoint and one key.
+        let config = Config::from_toml(
+            r#"
+            [[provider]]
+            id = "openrouter"
+            kind = "openai-compatible"
+            base_url = "https://openrouter.ai/api/v1"
+            models = ["qwen/qwen3-vl", "meta/llama-4"]
+            requires_key = true
+
+            [active]
+            provider = "openrouter"
+            model = "meta/llama-4"
+            "#,
+        )
+        .expect("a provider with several models must load");
+
+        let (provider, model) = config.active_provider().expect("a selection was made");
+        assert_eq!(provider.id, "openrouter");
+        assert_eq!(model, "meta/llama-4");
+    }
+
+    #[test]
+    fn selecting_a_model_the_provider_does_not_have_is_rejected() {
+        // Easy to cause by hand: remove a model from the list and forget the
+        // selection. The failure otherwise is a request for a model the endpoint
+        // has never heard of, which reads as a server problem.
+        let result = Config::from_toml(
+            r#"
+            [[provider]]
+            id = "local"
+            kind = "openai-compatible"
+            base_url = "http://localhost:11434/v1"
+            models = ["qwen2.5"]
+
+            [active]
+            provider = "local"
+            model = "a-model-that-was-removed"
+            "#,
+        );
+        assert!(matches!(
+            result,
+            Err(ConfigError::UnknownActiveModel { .. })
+        ));
+    }
+
+    #[test]
+    fn selecting_a_provider_that_is_not_configured_is_rejected() {
+        let result = Config::from_toml(
+            r#"
+            [active]
+            provider = "typo"
+            model = "whatever"
+            "#,
+        );
+        assert!(matches!(result, Err(ConfigError::UnknownActiveProvider(_))));
+    }
+
+    #[test]
+    fn a_provider_with_no_models_yet_is_allowed_but_cannot_be_active() {
+        // Adding an endpoint before discovering what it serves is a real step in
+        // the flow, so an empty list must load.
+        let config = Config::from_toml(
+            r#"
+            [[provider]]
+            id = "new"
+            kind = "openai-compatible"
+            base_url = "https://example.com/v1"
+            "#,
+        )
+        .expect("a provider awaiting discovery must load");
+        assert!(config.providers[0].models.is_empty());
+        assert!(config.active_provider().is_none());
     }
 
     #[test]
