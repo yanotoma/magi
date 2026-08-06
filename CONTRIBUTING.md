@@ -21,7 +21,7 @@ Pick something from `TASKS.md` and comment on the tracking issue before you star
 
 | | |
 |---|---|
-| Rust | Installed via [`rustup`](https://rustup.rs). The version is pinned in `rust-toolchain.toml` and applied automatically — you do not need to switch it manually. |
+| Rust | Installed via [`rustup`](https://rustup.rs). The version is pinned in `rust-toolchain.toml` and applied automatically — you do not need to switch it manually. **On macOS, check the PATH line landed in a file zsh reads** — see below. |
 | Node | 20+ |
 | cmake | Required to build whisper.cpp. `brew install cmake` |
 | macOS | Xcode Command Line Tools |
@@ -31,6 +31,17 @@ git clone https://github.com/yanotoma/magi.git
 cd magi
 npm install
 npm run tauri dev
+```
+
+**If that fails with `failed to run 'cargo metadata'` / `No such file or directory`,**
+`cargo` is installed but not on your `PATH`. rustup appends its PATH line to the
+shell profiles it detects, and on macOS it may write only `~/.profile` — which
+**zsh does not read**, and zsh is the default shell. The binary is fine; the
+wiring is not. Fix it once:
+
+```bash
+grep -q 'cargo/env' ~/.zshrc || echo '. "$HOME/.cargo/env"' >> ~/.zshrc
+source ~/.cargo/env   # for the shell you already have open
 ```
 
 ## Working with an AI assistant
