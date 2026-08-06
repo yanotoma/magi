@@ -68,7 +68,7 @@ One task is carried into M3/M4/M6 rather than done here — see the note on the 
 **Tray**
 - [x] `tray.rs` — tray icon with menu (Open, Settings, Quit) using `TrayIconBuilder`
 - [x] Left click opens the panel; right click opens the menu
-- [ ] Tray icon reflects session state (idle / listening / thinking) and capability tier — the state-to-icon mapping is written and unit-tested; the icon assets and live updating are not, and the states it maps do not exist until M3/M4/M6
+- [ ] Tray icon reflects session state (idle / listening / thinking) and capability tier — the mark, the generator, and the state-to-icon mapping exist and are tested; live updating waits for the states themselves, which arrive in M3/M4/M6
 - [x] macOS: set activation policy to `Accessory` so no Dock icon appears
 
 **Hotkey**
@@ -118,6 +118,7 @@ One task is carried into M3/M4/M6 rather than done here — see the note on the 
 - [ ] Settings UI — capability matrix per provider
 - [ ] Settings UI — *Re-test* button with progress
 - [ ] Surface the active tier in the tray tooltip
+- [ ] Design the degraded tray icon. A cancel slash across three separated nodes does not read at 22pt — the mark is discontinuous, so the bar alternates between empty space and ring and every crossing forces a choice between eating the ring and breaking the bar. Needs a different idea, looked at in a real menu bar
 
 ---
 

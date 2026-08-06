@@ -23,7 +23,12 @@ tauri-build = { version = "2", features = [] }
 # macos-private-api is required for the transparent overlay panel. It permanently
 # blocks Mac App Store distribution — a deliberate tradeoff; Magi ships a signed
 # DMG directly. See .claude/skills/macos-permissions/SKILL.md.
-tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
+tauri = { version = "2", features = [
+  "macos-private-api",
+  "tray-icon",
+  # Decodes the tray PNG at runtime via Image::from_bytes.
+  "image-png",
+] }
 tauri-plugin-global-shortcut = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
