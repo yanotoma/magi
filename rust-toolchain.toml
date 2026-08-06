@@ -4,5 +4,10 @@
 [toolchain]
 channel = "stable"
 components = ["rustfmt", "clippy"]
-targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
 profile = "default"
+
+# No `targets` here on purpose. Listing the two Apple targets would make every
+# toolchain install fetch them, including on the Linux CI jobs that run lint,
+# tests and formatting and will never emit a Darwin binary. The native target is
+# always present; M7's universal build adds what it needs with `rustup target
+# add` at the point of use.

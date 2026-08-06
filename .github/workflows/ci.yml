@@ -14,31 +14,35 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check:
-    # macOS is Magi's only supported target for v1. Windows and Linux runners
-    # are added in M7 alongside their packaging.
-    runs-on: macos-14
-
+  # Everything that needs no compilation and no platform. Runs on Linux because
+  # it can, and because Linux runners are abundant while macOS runners are
+  # scarce — a formatting mistake should not wait in the same queue as a desktop
+  # app build. `cargo fmt` only parses source, so this job needs no system
+  # libraries at all.
+  quick:
+    name: Format, types, docs
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        # rust-toolchain.toml pins the version, components, and targets.
-        # `rustup show` installs whatever it asks for; there is deliberately no
-        # toolchain argument here, so CI can never disagree with local builds.
+        # rust-toolchain.toml pins the version, components and targets. No
+        # version argument here, so CI cannot disagree with a local build.
         run: rustup show
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
 
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
 
-      - name: Install npm dependencies
-        run: npm ci
+      - run: npm ci
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+        working-directory: src-tauri
+
+      - name: Typecheck frontend
+        run: npm run check
 
       - name: Check task counts
         # docs/TASKS.md states each task twice — as a checkbox and as a count in
@@ -47,25 +51,73 @@ jobs:
         # notice. Derive the table instead of trusting it.
         run: python3 tools/task_counts.py --check
 
-      - name: Check formatting
-        run: cargo fmt --all --check
-        working-directory: src-tauri
+  # Lint and tests. These compile the crate, which pulls in Tauri and therefore
+  # the platform's webview stack — hence the apt packages. Magi's tests are pure
+  # logic and touch no platform API; they only need a build because they live in
+  # a crate that depends on Tauri. See the `magi-core` note in docs/TASKS.md.
+  lint-and-test:
+    name: Lint and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Tauri's Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            patchelf \
+            build-essential \
+            file
+
+      - name: Install Rust toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: linux
 
       - name: Lint
         run: cargo clippy --all-targets -- -D warnings
         working-directory: src-tauri
 
       - name: Test
-        # Covers the version-drift guard and every module unit test. No test may
-        # require a GPU, microphone, display, or network — the runner has none.
+        # No test may require a GPU, microphone, display, or network — the
+        # runner has none of them, which is the point.
         run: cargo test
         working-directory: src-tauri
 
-      - name: Typecheck frontend
-        run: npm run check
+  # The only job that genuinely needs macOS: Tauri links WebKit, AppKit and Core
+  # Graphics here, and a .app cannot be cross-compiled from Linux in practice.
+  # Signing and notarization join this job in M7.
+  build-macos:
+    name: Build (macOS)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: macos
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
 
       - name: Build
-        # --no-bundle keeps CI off signing and notarization, which arrive in M7.
-        # The build still catches compile errors that `cargo test` would miss,
-        # because it compiles the release profile and the frontend together.
+        # --no-bundle stops before packaging. Bundling needs a Developer ID
+        # certificate, and putting signing credentials in CI before there is
+        # anything to distribute is risk for nothing. M7 adds it.
         run: npm run tauri build -- --no-bundle
