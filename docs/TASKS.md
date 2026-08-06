@@ -17,11 +17,11 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 |---|---|---|---:|---:|---|
 | **M0** | Foundations | — | 15 | 15 | ✅ Complete |
 | **M1** | Shell — tray, hotkey, windows | `0.1.0-alpha.1` | 15 | 16 | ✅ Shipped |
-| **M2** | Config & providers | `0.2.0-alpha.1` | 0 | 17 | ⬜ |
+| **M2** | Config & providers | `0.2.0-alpha.1` | 0 | 18 | ⬜ |
 | **M3** | Pre-flight & capability tiers | `0.2.0-alpha.1` | 0 | 11 | ⬜ |
 | **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 0 | 14 | ⬜ |
 | **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 0 | 13 | ⬜ |
-| **M6** | Session machine & panel UX | `0.5.0-beta.1` | 0 | 15 | ⬜ |
+| **M6** | Session machine & panel UX | `0.5.0-beta.1` | 0 | 16 | ⬜ |
 | **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 15 | ⬜ |
 | — | **v1 total** | `1.0.0` | **30** | **116** | |
 | **M8** | v2 — wake word & TTS | `1.1.0` | 0 | 9 | 🔮 Post-v1 |
@@ -102,6 +102,7 @@ One task is carried into M3/M4/M6 rather than done here — see the note on the 
 - [ ] `FakeProvider` for tests, replaying scripted turns including tool calls
 - [ ] Settings UI — provider list with add / edit / remove
 - [ ] Settings UI — hotkey capture control
+- [ ] `[prompt] context` in `config.toml` — free text appended to Magi's system prompt. **Additive, never a replacement**: Magi's own instructions carry the contract that makes agentic capture fire, and letting a user overwrite them breaks tier 1 silently
 
 ---
 
@@ -118,6 +119,8 @@ One task is carried into M3/M4/M6 rather than done here — see the note on the 
 - [ ] Settings UI — capability matrix per provider
 - [ ] Settings UI — *Re-test* button with progress
 - [ ] Surface the active tier in the tray tooltip
+- [ ] `llm::prompt` — assemble messages from `(tier, config, history)` rather than from a constant. The prompt is tier-dependent: tier 1 needs instructions on when to call `capture_screen`; tier 2 must not be told about tools at all, since the harness captures ahead of it by heuristic and mentioning tools only invites malformed tool syntax in prose; tier 3 needs to know it cannot see the screen so it stops promising to look
+- [ ] Unit tests for prompt assembly per tier — pure logic, no network
 - [ ] Design the degraded tray icon. A cancel slash across three separated nodes does not read at 22pt — the mark is discontinuous, so the bar alternates between empty space and ring and every crossing forces a choice between eating the ring and breaking the bar. Needs a different idea, looked at in a real menu bar
 
 ---
@@ -182,6 +185,7 @@ One task is carried into M3/M4/M6 rather than done here — see the note on the 
 - [ ] Panel — Esc dismisses; click-outside behavior
 - [ ] Panel — inline error surfaces per failure class
 - [ ] Panel — markdown and code-block rendering with syntax highlighting
+- [ ] Prompt templates: pre-written user prompts bound to a trigger ("explain this error", "summarise this screen"). Distinct from the system prompt — these are user turns, not instructions, and they belong in the panel UI rather than in the prompt assembler
 
 ---
 

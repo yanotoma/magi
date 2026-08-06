@@ -21,6 +21,17 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(hotkey::plugin())
+        // Remember where the user dragged the panel to.
+        //
+        // POSITION only, deliberately. The plugin can also restore VISIBLE, and
+        // doing so here would show the panel on launch — turning a background
+        // agent into an app that greets you with a window every login. SIZE and
+        // MAXIMIZED are equally wrong for a fixed-size overlay.
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(tauri_plugin_window_state::StateFlags::POSITION)
+                .build(),
+        )
         .setup(|app| {
             // Magi is a background agent: no Dock icon, no app-switcher entry.
             // `skipTaskbar` in the window config does not do this on macOS — it
