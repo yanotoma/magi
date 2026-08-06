@@ -1,7 +1,3 @@
-// Tauri doesn't have a Node.js server to do proper SSR
-// so we use adapter-static with a fallback to index.html to put the site in SPA mode
-// See: https://svelte.dev/docs/kit/single-page-apps
-// See: https://v2.tauri.app/start/frontend/sveltekit/ for more info
 import adapter from "@sveltejs/adapter-static";
 import { vitePreprocess } from "@sveltejs/vite-plugin-svelte";
 
@@ -9,9 +5,11 @@ import { vitePreprocess } from "@sveltejs/vite-plugin-svelte";
 const config = {
   preprocess: vitePreprocess(),
   kit: {
-    adapter: adapter({
-      fallback: "index.html",
-    }),
+    // Tauri has no Node server, so there is nothing to server-render. Routes are
+    // prerendered to real files rather than served through an SPA fallback: a
+    // fallback is only ever exercised in the production bundle, which is the
+    // worst place to discover that a window's URL does not resolve.
+    adapter: adapter(),
   },
 };
 

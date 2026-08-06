@@ -10,11 +10,32 @@
     "frontendDist": "../build"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
-        "title": "magi",
-        "width": 800,
-        "height": 600
+        "label": "panel",
+        "title": "Magi",
+        "url": "/panel/",
+        "width": 520,
+        "height": 400,
+        "resizable": false,
+        "visible": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "center": true,
+        "shadow": false
+      },
+      {
+        "label": "settings",
+        "title": "Magi Settings",
+        "url": "/settings/",
+        "width": 720,
+        "height": 560,
+        "resizable": true,
+        "visible": false,
+        "center": true
       }
     ],
     "security": {
