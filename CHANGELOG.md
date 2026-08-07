@@ -21,16 +21,19 @@ Magi answers for the first time.
 - Light, Dark, and System themes
 - The model's reasoning can be shown, off by default, under General
 - `Escape`, Stop, or asking again cancels an answer in flight
+- The global shortcut is configurable: click the shortcut in Settings → Hotkeys and press a new combination. One another application already owns is refused, and the old shortcut keeps working
+- Standing context under Settings → General, sent with every question — where you are, what you work on, which units you think in. It adds to Magi's instructions and cannot replace them
 
 ### Fixed
 - Cancelling an answer with `Escape` left the panel stuck: reopening it showed only a Stop button that did nothing, and typing was impossible
 - The panel's corners showed a lighter patch where the translucent background did not follow the window's rounded shape
+- A shortcut set in `config.toml` was ignored at launch: the default was registered instead, so a changed hotkey worked until Magi was quit and then reverted
 
 ### Known limitations
 - No voice and no screen capture yet — this release is text only
 - Nothing verifies that the chosen model can actually do what is asked of it; that is the next milestone
 - Links in an answer are shown with their destination but are not clickable
-- The hotkey is still not configurable
+- Combinations the operating system reserves for itself cannot be bound, and it does not report which application holds one
 
 ## [0.1.0-alpha.1] - 2026-08-06
 

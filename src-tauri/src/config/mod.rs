@@ -46,6 +46,16 @@ pub enum ConfigError {
 
     #[error("provider '{provider}' has no model named '{model}'")]
     UnknownActiveModel { provider: String, model: String },
+
+    #[error(
+        "[prompt] context is {found} characters, over the {limit} limit. It is sent with \
+         every single turn, so a long one costs tokens on each question and crowds out \
+         the conversation. Keep it to standing facts — who you are, what you work on."
+    )]
+    PromptContextTooLong { found: usize, limit: usize },
+
+    #[error("[hotkey] toggle is not a usable shortcut: {reason}")]
+    InvalidHotkey { reason: String },
 }
 
 /// How a provider speaks, which decides which implementation handles it.
@@ -137,6 +147,33 @@ impl Default for HotkeyConfig {
     }
 }
 
+/// The ceiling on `[prompt] context`.
+///
+/// Generous for its purpose and still small next to any model's window. The limit
+/// exists because this text is prepended to *every* turn: an essay here is a
+/// permanent tax on every question, and it competes with the conversation for the
+/// model's attention rather than adding to it.
+pub const MAX_PROMPT_CONTEXT: usize = 4000;
+
+/// Standing context the user wants every answer to account for.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct PromptConfig {
+    /// Free text **appended** to Magi's own system prompt, never replacing it.
+    ///
+    /// The distinction is structural, not stylistic. Magi's prompt carries the
+    /// contract that makes the rest of the app work — from M5 on it is what tells
+    /// the model that a screen-capture tool exists and when to reach for it. A
+    /// user who could overwrite it would silently disable agentic capture and see
+    /// only a model that stopped looking at their screen, with nothing anywhere
+    /// to connect that to a text box in Settings.
+    ///
+    /// So this field can add to the instructions and cannot remove them. The
+    /// worst a hostile value can do is argue with the prompt above it, and
+    /// whoever typed it is the person it would mislead.
+    pub context: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -145,6 +182,9 @@ pub struct Config {
 
     #[serde(default)]
     pub hotkey: HotkeyConfig,
+
+    #[serde(default)]
+    pub prompt: PromptConfig,
 
     #[serde(default)]
     pub appearance: AppearanceConfig,
@@ -169,6 +209,7 @@ impl Default for Config {
         Self {
             schema_version: CURRENT_SCHEMA_VERSION,
             hotkey: HotkeyConfig::default(),
+            prompt: PromptConfig::default(),
             appearance: AppearanceConfig::default(),
             active: None,
             providers: Vec::new(),
@@ -202,6 +243,27 @@ impl Config {
     }
 
     fn validate(&self) -> Result<(), ConfigError> {
+        // Counted in characters, not bytes: the limit is about how much text the
+        // user wrote, and `len()` would give a Spanish or Japanese context a
+        // smaller allowance than an English one for the same amount of writing.
+        let context_length = self.prompt.context.chars().count();
+        if context_length > MAX_PROMPT_CONTEXT {
+            return Err(ConfigError::PromptContextTooLong {
+                found: context_length,
+                limit: MAX_PROMPT_CONTEXT,
+            });
+        }
+
+        // Checked on load, not only when Settings writes it. This file is meant to
+        // be hand-edited, and a hand-written `toggle = "Space"` would otherwise be
+        // registered as typed — swallowing the spacebar in every application on
+        // the machine, with Magi's own text box among the casualties.
+        crate::hotkey::validate_shortcut(&self.hotkey.toggle).map_err(|e| {
+            ConfigError::InvalidHotkey {
+                reason: e.to_string(),
+            }
+        })?;
+
         let mut seen = HashSet::new();
         for provider in &self.providers {
             if !seen.insert(provider.id.as_str()) {
@@ -272,6 +334,81 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prompt_context_defaults_to_empty() {
+        let config = Config::from_toml("").expect("an empty file is valid");
+        assert_eq!(config.prompt.context, "");
+    }
+
+    #[test]
+    fn prompt_context_round_trips() {
+        let config = Config::from_toml(
+            r#"
+            [prompt]
+            context = "I work in Kitchener and prefer metric units."
+            "#,
+        )
+        .expect("valid");
+        assert_eq!(
+            config.prompt.context,
+            "I work in Kitchener and prefer metric units."
+        );
+    }
+
+    #[test]
+    fn rejects_an_over_length_prompt_context() {
+        let source = format!(
+            "[prompt]\ncontext = \"{}\"",
+            "a".repeat(MAX_PROMPT_CONTEXT + 1)
+        );
+        assert!(matches!(
+            Config::from_toml(&source),
+            Err(ConfigError::PromptContextTooLong { .. })
+        ));
+    }
+
+    #[test]
+    fn the_prompt_context_limit_counts_characters_not_bytes() {
+        // Every one of these is three bytes in UTF-8, so a byte-based limit would
+        // give a Japanese context a third of the allowance of an English one for
+        // the same amount of writing.
+        let source = format!(
+            "[prompt]\ncontext = \"{}\"",
+            "あ".repeat(MAX_PROMPT_CONTEXT)
+        );
+        assert!(
+            Config::from_toml(&source).is_ok(),
+            "a context at exactly the character limit must be accepted"
+        );
+    }
+
+    #[test]
+    fn rejects_a_hand_written_hotkey_with_no_modifier() {
+        // The destructive case, and the reason validation runs on load rather than
+        // only when Settings writes the field: registering a bare key globally
+        // swallows it in every application on the machine.
+        let error = Config::from_toml(
+            r#"
+            [hotkey]
+            toggle = "Space"
+            "#,
+        )
+        .expect_err("a bare key must be refused");
+        assert!(matches!(error, ConfigError::InvalidHotkey { .. }));
+    }
+
+    #[test]
+    fn accepts_a_hand_written_valid_hotkey() {
+        let config = Config::from_toml(
+            r#"
+            [hotkey]
+            toggle = "CmdOrCtrl+Shift+M"
+            "#,
+        )
+        .expect("valid");
+        assert_eq!(config.hotkey.toggle, "CmdOrCtrl+Shift+M");
+    }
 
     fn tempdir() -> tempfile::TempDir {
         tempfile::tempdir().expect("a temp dir must be creatable")

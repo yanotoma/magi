@@ -149,9 +149,53 @@ pub fn plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
         .build()
 }
 
-/// Registers [`DEFAULT_SHORTCUT`].
-pub fn register_default(app: &AppHandle) -> Result<(), ShellError> {
-    register(app, DEFAULT_SHORTCUT)
+/// Swaps one registered shortcut for another, keeping the old one on failure.
+///
+/// The order is the whole point of this function.
+///
+/// Validation runs first, while `previous` is still registered, so a typo cannot
+/// cost the user their working hotkey. Then, if the OS refuses the new
+/// combination — most often because another application already owns it — the old
+/// one is put back. Unregistering first and registering second would leave a
+/// window in which a rejected shortcut means no hotkey at all, and for a
+/// background app whose main entry point *is* the hotkey, that is close to
+/// uninstalling it: the tray is the only way back, and the user has no reason to
+/// expect the failure left them worse off than before they tried.
+///
+/// Restoring can itself fail. That is reported rather than swallowed, because the
+/// user needs to know the hotkey is gone entirely — the one state where the tray
+/// icon is the only way in.
+pub fn rebind(app: &AppHandle, previous: &str, next: &str) -> Result<(), ShellError> {
+    validate_shortcut(next).map_err(|e| ShellError::ShortcutRegistration {
+        shortcut: next.to_string(),
+        reason: e.to_string(),
+    })?;
+
+    if previous == next {
+        return Ok(());
+    }
+
+    // A previous shortcut that was never successfully registered — startup found
+    // it already taken — cannot be unregistered. That is not an error worth
+    // failing the rebind for; the goal is for `next` to work.
+    if let Err(error) = app.global_shortcut().unregister(previous) {
+        tracing::debug!(%error, previous, "previous shortcut was not registered");
+    }
+
+    match register(app, next) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            match register(app, previous) {
+                Ok(()) => tracing::info!(previous, "restored the previous shortcut"),
+                Err(restore) => tracing::error!(
+                    %restore,
+                    previous,
+                    "could not restore the previous shortcut; no global hotkey is registered"
+                ),
+            }
+            Err(error)
+        }
+    }
 }
 
 /// Validates and registers a shortcut.

@@ -6,13 +6,17 @@
     setActiveModel,
     setTheme,
     setShowThinking,
+    setPromptContext,
+    setHotkey,
     discoverModels,
+    MAX_PROMPT_CONTEXT,
     PRESETS,
     type ConfigView,
     type ProviderKind,
     type ProviderView,
     type Theme,
   } from "$lib/ipc";
+  import { acceleratorFrom, describeShortcut } from "$lib/shortcut";
 
   type Pane = "general" | "models" | "hotkeys";
 
@@ -34,6 +38,14 @@
   let editing = $state<string | null>(null);
   let discovering = $state(false);
   let discovered = $state<string | null>(null);
+  let capturing = $state(false);
+
+  // An editable copy rather than binding straight to `config.prompt.context`. The
+  // backend is the source of truth and every mutation replaces `config` wholesale,
+  // so a direct binding would have the box rewritten under the cursor by an
+  // unrelated save.
+  let promptContext = $state("");
+  let contextSaved = $state(false);
 
   // `apiKey` starts undefined and stays that way unless the user types, so
   // editing an endpoint never silently drops a stored credential.
@@ -55,9 +67,67 @@
     }
   };
 
+  // The first load seeds the context box; later refreshes deliberately do not.
+  // `run` replaces `config` after every mutation — saving a provider, switching
+  // theme — and copying the context across on each of those would discard
+  // whatever the user was in the middle of typing.
   $effect(() => {
-    run(getConfig);
+    getConfig()
+      .then((loaded) => {
+        config = loaded;
+        promptContext = loaded.prompt.context;
+      })
+      .catch((e) => (error = String(e)));
   });
+
+  /** Saves the context on blur, and only when it actually changed. */
+  const saveContext = async () => {
+    if (!config || promptContext === config.prompt.context) return;
+    await run(() => setPromptContext(promptContext));
+    if (error) return;
+
+    // A written setting with no visible effect needs to say so. Everything else
+    // in this screen changes something the user can see; this changes what the
+    // next answer is told, which is invisible until they ask something.
+    contextSaved = true;
+    setTimeout(() => (contextSaved = false), 1800);
+  };
+
+  const startCapture = () => {
+    capturing = true;
+    error = null;
+  };
+
+  const stopCapture = () => {
+    capturing = false;
+  };
+
+  const onCaptureKey = (event: KeyboardEvent) => {
+    // Before capture starts, the button is an ordinary button: Enter and Space
+    // must still activate it, so nothing is intercepted here.
+    if (!capturing) return;
+
+    // Once capturing, every key belongs to the capture. Without this, Space
+    // re-triggers the button, Tab moves focus away mid-combination, and on macOS
+    // combinations like Cmd+W would close the window instead of being recorded.
+    event.preventDefault();
+    event.stopPropagation();
+
+    // Bare Escape backs out. With a modifier it is a legitimate shortcut, so only
+    // the unmodified press cancels.
+    if (event.key === "Escape" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+      capturing = false;
+      return;
+    }
+
+    const accelerator = acceleratorFrom(event);
+    // Null means the combination is not finished — modifiers are usually pressed
+    // before the key, so this is the normal path, not an error.
+    if (!accelerator) return;
+
+    capturing = false;
+    run(() => setHotkey(accelerator));
+  };
 
   const resetForm = () => {
     editing = null;
@@ -189,6 +259,29 @@
         answer, so it appears behind a disclosure rather than inline.
       </p>
 
+      <h2 class="spaced">Context</h2>
+      <p class="hint">
+        Standing facts you want every answer to account for — where you are, what
+        you work on, which units you think in. Sent with every question, so keep it
+        short.
+      </p>
+      <textarea
+        class="context"
+        rows="5"
+        maxlength={MAX_PROMPT_CONTEXT}
+        placeholder="I work in Kitchener, Ontario, mostly in Rust and TypeScript."
+        bind:value={promptContext}
+        onblur={saveContext}
+      ></textarea>
+      <p class="hint counter" class:near={promptContext.length > MAX_PROMPT_CONTEXT * 0.9}>
+        {promptContext.length} / {MAX_PROMPT_CONTEXT}
+        {#if contextSaved}<span class="saved">saved</span>{/if}
+      </p>
+      <p class="hint">
+        This adds to Magi's instructions and cannot replace them, so it is not a
+        place to change how Magi works — only what it knows about you.
+      </p>
+
       {#if config}
         <h2 class="spaced">Configuration file</h2>
         <code class="path">{config.config_path}</code>
@@ -200,8 +293,34 @@
 
     {#if pane === "hotkeys"}
       <h2>Global shortcut</h2>
-      <p>Toggle the panel: <kbd>{config?.hotkey ?? "Alt+Space"}</kbd></p>
-      <p class="hint">Editing the shortcut is not wired up yet.</p>
+      <p class="hint">Toggles the panel from anywhere, whatever has focus.</p>
+
+      <button
+        type="button"
+        class="capture"
+        class:listening={capturing}
+        onclick={startCapture}
+        onblur={stopCapture}
+        onkeydown={onCaptureKey}
+      >
+        {#if capturing}
+          <span class="prompt">Press a combination…</span>
+        {:else}
+          <kbd>{describeShortcut(config?.hotkey ?? "")}</kbd>
+        {/if}
+      </button>
+
+      {#if capturing}
+        <p class="hint">
+          Hold at least one modifier. <kbd>Esc</kbd> cancels, and nothing changes
+          until a combination is accepted.
+        </p>
+      {:else}
+        <p class="hint">
+          Click to change it. A combination another application already owns will
+          be refused, and the current one keeps working.
+        </p>
+      {/if}
     {/if}
 
     {#if pane === "models"}
@@ -621,6 +740,54 @@
     border-radius: 4px;
     font-family: ui-monospace, monospace;
     padding: 2px 6px;
+  }
+
+  /* Prose, so it overrides the monospace the model-list textarea wants. */
+  .context {
+    box-sizing: border-box;
+    font-family: inherit;
+    margin-top: 8px;
+    width: 100%;
+  }
+
+  .counter {
+    display: flex;
+    gap: 8px;
+    /* Digits that do not shift the "saved" label sideways as the count changes. */
+    font-variant-numeric: tabular-nums;
+  }
+
+  .counter.near {
+    opacity: 0.9;
+  }
+
+  .saved {
+    color: AccentColor;
+  }
+
+  /* Wide and tall enough that the label does not move when it swaps between the
+     shortcut and the prompt to press one — a control that changes size on click
+     reads as a glitch. */
+  .capture {
+    margin-top: 4px;
+    min-width: 15em;
+    padding: 7px 11px;
+    text-align: center;
+  }
+
+  .capture.listening {
+    border-color: AccentColor;
+    box-shadow: 0 0 0 3px color-mix(in srgb, AccentColor 25%, transparent);
+  }
+
+  .capture kbd {
+    background: none;
+    font-size: 14px;
+    padding: 0;
+  }
+
+  .capture .prompt {
+    opacity: 0.7;
   }
 
   .path {

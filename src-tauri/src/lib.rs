@@ -65,6 +65,7 @@ pub fn run() {
             });
 
             let theme = config.appearance.theme;
+            let shortcut = config.hotkey.toggle.clone();
 
             app.manage(AppState {
                 http: reqwest::Client::new(),
@@ -79,11 +80,16 @@ pub fn run() {
 
             tray::init(app)?;
 
+            // The configured shortcut, not the default one. Registering the
+            // default here would ignore the field the user just set in Settings,
+            // so their hotkey would work until they quit and then revert on every
+            // launch — a bug that looks like the setting not saving at all.
+            //
             // A shortcut conflict must not prevent startup. The tray icon is
             // still a working way in, and killing launch over a hotkey clash
             // would leave the user with no entry point at all.
-            if let Err(error) = hotkey::register_default(app.handle()) {
-                tracing::warn!(%error, "continuing without a global shortcut");
+            if let Err(error) = hotkey::register(app.handle(), &shortcut) {
+                tracing::warn!(%error, shortcut, "continuing without a global shortcut");
             }
 
             Ok(())
@@ -96,6 +102,8 @@ pub fn run() {
             commands::discover_models,
             commands::set_theme,
             commands::set_show_thinking,
+            commands::set_prompt_context,
+            commands::set_hotkey,
             commands::send_text_turn,
             commands::cancel_turn,
         ])

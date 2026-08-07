@@ -5,7 +5,7 @@ Complete breakdown of what is done and what is pending, across every milestone.
 **Last updated:** 2026-08-06
 **Current phase:** M2 — the text loop works end to end; manual verification pending
 **Current version:** `0.1.0-alpha.1` (released — see [VERSIONING.md](VERSIONING.md))
-**Overall:** 53 / 142 tasks done (37%)
+**Overall:** 57 / 144 tasks done (40%)
 
 Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 
@@ -17,13 +17,13 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 |---|---|---|---:|---:|---|
 | **M0** | Foundations | — | 15 | 15 | ✅ Complete |
 | **M1** | Shell — tray, hotkey, windows | `0.1.0-alpha.1` | 15 | 16 | ✅ Shipped |
-| **M2** | Config & providers | `0.2.0-alpha.1` | 23 | 26 | 🔨 In progress |
+| **M2** | Config & providers | `0.2.0-alpha.1` | 27 | 28 | 🔨 In progress |
 | **M3** | Pre-flight & capability tiers | `0.2.0-alpha.1` | 0 | 14 | ⬜ |
 | **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 0 | 14 | ⬜ |
 | **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 0 | 13 | ⬜ |
 | **M6** | Session machine & panel UX | `0.5.0-beta.1` | 0 | 16 | ⬜ |
 | **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 14 | ⬜ |
-| — | **v1 total** | `1.0.0` | **53** | **128** | |
+| — | **v1 total** | `1.0.0` | **57** | **130** | |
 | **M8** | v2 — wake word & TTS | `1.1.0` | 0 | 9 | 🔮 Post-v1 |
 | **M9** | v3 — computer use | `1.2.0` | 0 | 5 | 🔮 Post-v1 |
 
@@ -113,8 +113,10 @@ The milestone was widened from pure infrastructure for one reason: with the orig
 - [x] Inline errors naming the provider and the resolved URL — "connection refused" is useless without knowing what it tried to reach
 - [x] Settings UI — provider list with add / edit / remove
 - [x] Render answers as markdown — bold, lists, tables, code. Models emit markdown whether or not it is asked for, so plain text does not mean "no formatting", it means showing `**weather.com**` with the asterisks. Rendered with raw HTML disabled at the parser rather than sanitised afterwards, images disabled (a model-chosen image URL is a read-receipt beacon), and links rendered as non-navigable text next to their real destination — this panel is the app's own webview, so following a link would replace Magi's UI with no way back
-- [ ] Settings UI — hotkey capture control
-- [ ] `[prompt] context` in `config.toml` — free text appended to Magi's system prompt. **Additive, never a replacement**: Magi's own instructions carry the contract that makes agentic capture fire, and letting a user overwrite them breaks tier 1 silently
+- [x] Settings UI — hotkey capture control. Records from `event.code`, not `event.key`: `key` reports what the layout *produces*, so Alt+A is "å" on macOS and a stored binding would depend on the layout at the moment it was recorded. Validation runs before the old shortcut is released and the old one is restored if the OS refuses the new one, so a failed attempt never leaves a background app with no way in
+- [x] `[prompt] context` in `config.toml` — free text appended to Magi's system prompt. **Additive, never a replacement**: Magi's own instructions carry the contract that makes agentic capture fire, and letting a user overwrite them breaks tier 1 silently. Enforced by a single `system_prompt()` with no branch that omits Magi's half, and a test asserting no input — hostile ones included — can produce a prompt not led by it
+- [x] Register the shortcut the config actually names at startup, not the default. Registering the default meant a hotkey set in Settings worked until quit and then reverted, which reads as the setting failing to save
+- [x] Validate `[hotkey] toggle` on load, not only when Settings writes it. The file is meant to be hand-edited, and a hand-written `toggle = "Space"` would be registered as typed — swallowing the spacebar in every application on the machine
 
 ---
 

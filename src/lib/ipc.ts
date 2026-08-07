@@ -37,10 +37,19 @@ export type AppearanceConfig = {
   show_thinking: boolean;
 };
 
+export type PromptConfig = {
+  /** Appended to Magi's own system prompt. It never replaces it. */
+  context: string;
+};
+
+/** Mirrors `MAX_PROMPT_CONTEXT` in `config/mod.rs`, which is the real limit. */
+export const MAX_PROMPT_CONTEXT = 4000;
+
 export type ConfigView = {
   providers: ProviderView[];
   active: ActiveModel | null;
   hotkey: string;
+  prompt: PromptConfig;
   appearance: AppearanceConfig;
   config_path: string;
 };
@@ -100,6 +109,20 @@ export const setShowThinking = async (show: boolean): Promise<ConfigView> =>
 
 export const setActiveModel = async (provider: string, model: string): Promise<ConfigView> =>
   invoke<ConfigView>("set_active_model", { provider, model });
+
+/** Replaces the standing context sent with every turn. */
+export const setPromptContext = async (context: string): Promise<ConfigView> =>
+  invoke<ConfigView>("set_prompt_context", { context });
+
+/**
+ * Rebinds the global shortcut.
+ *
+ * Rejects rather than saves when the OS refuses the combination — most often
+ * because another application already owns it. The previous shortcut keeps
+ * working in that case, so a failed attempt costs nothing.
+ */
+export const setHotkey = async (shortcut: string): Promise<ConfigView> =>
+  invoke<ConfigView>("set_hotkey", { shortcut });
 
 /** Endpoints common enough to be worth not typing out. */
 export const PRESETS: ReadonlyArray<{
