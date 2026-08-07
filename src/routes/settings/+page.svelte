@@ -131,6 +131,47 @@
   const isTesting = (providerId: string, model: string): boolean =>
     testing?.provider === providerId && testing?.model === model;
 
+  /** What each probe actually sent, and what the result means.
+   *
+   *  Written per outcome rather than per column, because the interesting half is the
+   *  failure. "JSON ✕" on its own reads as "cannot produce JSON", when what was
+   *  measured is narrower and more useful: a schema was sent and the reply did not
+   *  match it. A model can return perfectly good JSON and still fail that. */
+  const explain = (probe: string, value: boolean | undefined): string => {
+    if (value === undefined) return "Not tested yet. Press Test to find out.";
+
+    const passed: Record<string, string> = {
+      reachable: "The endpoint answered with this model and this key.",
+      vision:
+        "Magi sent a generated image of a digit and the model named it correctly, " +
+        "so it genuinely reads images rather than accepting and ignoring them.",
+      tools:
+        "Magi offered one tool and the model made a structurally valid call with " +
+        "the required argument filled in.",
+      json:
+        "Magi sent a JSON Schema and the reply matched it — the exact field names " +
+        "and types that were asked for.",
+    };
+
+    const failed: Record<string, string> = {
+      reachable:
+        "The endpoint did not answer. Check the URL and the key, and — for a local " +
+        "server — that it is running and the model is downloaded.",
+      vision:
+        "The model did not read the test image. Either it has no vision, or it " +
+        "accepted the image and ignored it.",
+      tools:
+        "No usable tool call came back. The model may have described the call in " +
+        "prose instead of making it, or left the required argument empty.",
+      json:
+        "The reply did not match the schema that was sent. Returning valid JSON is " +
+        "not enough — the field names and types have to be the ones requested, or " +
+        "code reading the answer has to guess.",
+    };
+
+    return (value ? passed : failed)[probe] ?? "";
+  };
+
   /** A capability cell: yes, no, or not yet asked.
    *
    *  Three states rather than a boolean. "Untested" and "failed" are different
@@ -466,11 +507,25 @@
                           dash: it has not failed, nobody has asked it yet, and
                           rendering that as a cross would be a claim Magi has not
                           earned.
+
+                          Each cell states what was actually tried, not just what it
+                          measured. A column header saying "JSON" leaves a cross
+                          looking arbitrary — the useful information is that a schema
+                          was sent and the reply did not match it, which is a
+                          different claim from "does not do JSON".
                         -->
-                        <td class="mark">{glyph(probed?.reachable)}</td>
-                        <td class="mark">{glyph(probed?.vision)}</td>
-                        <td class="mark">{glyph(probed?.tools)}</td>
-                        <td class="mark">{glyph(probed?.structured_output)}</td>
+                        <td class="mark" title={explain("reachable", probed?.reachable)}>
+                          {glyph(probed?.reachable)}
+                        </td>
+                        <td class="mark" title={explain("vision", probed?.vision)}>
+                          {glyph(probed?.vision)}
+                        </td>
+                        <td class="mark" title={explain("tools", probed?.tools)}>
+                          {glyph(probed?.tools)}
+                        </td>
+                        <td class="mark" title={explain("json", probed?.structured_output)}>
+                          {glyph(probed?.structured_output)}
+                        </td>
 
                         <td>
                           {#if probed}
