@@ -119,6 +119,18 @@ Probe 3 is the one that earns its keep. **Small local models frequently ignore t
 
 Pre-flight uses throwaway inputs only. It never sends real screen contents.
 
+### Look at the probe image before trusting a vision result
+
+Magi's vision probe reported a genuinely sighted model as blind, and no test caught it. The generated seven-segment digit had unfilled corners — the horizontal bars were inset at both ends and the verticals started below them, so neither covered the corner square. A `7` came out as a detached bar above a detached stroke.
+
+The model was working perfectly. Sent that image it answered `1`, and explained itself: *"the shape consists of a single vertical bar, which is characteristic of the number 1."* It read exactly what was there. The probe was not asking "can you see?" — it was asking "can you guess the digit I meant to draw?"
+
+Three lessons, in order of how much they cost:
+
+- **Render the probe input and look at it.** Ten tests passed: something was drawn, the ten digits differed from each other, the PNG decoded. None of them is legibility, and legibility is the whole requirement.
+- **Connectivity is the testable proxy.** On a real seven-segment display the lit segments of every digit touch, so a flood fill finds exactly one region. That test would have caught the broken corners.
+- **Pick a digit that looks like a digit.** `7` lights only two segments and renders as a corner. `2` lights five and gives the unmistakable zigzag. Optimising only against easy blind guesses (0, 1, 8) picked the least legible glyph available.
+
 ### Budget the probes for thinking, not for the answer
 
 **A tight `max_tokens` on a probe reports the most capable models as the least capable.** Reasoning tokens are generated and billed whether or not the limit accommodates them, so a small limit does not avoid that cost — it truncates the answer the cost was spent producing. A model that thinks for three hundred tokens about a picture of a `7` returns empty `content`, and every verdict reads empty as failure.
@@ -137,7 +149,7 @@ Two rules follow:
 | Ollama | Base URL is `http://localhost:11434/v1`. Tool support varies sharply by model, not by server version. A model that is not pulled yields a 404 that reads like a bad endpoint |
 | LM Studio | Base URL is `http://localhost:1234/v1`. Server must be started explicitly; a connection refused is the normal state, not an error worth alarming about |
 | OpenRouter | OpenAI-shaped, but capabilities vary per underlying model. Pre-flight per model, never per provider |
-| Xiaomi MiMo | Serves both protocols on one host: `/v1` is OpenAI-shaped, `/anthropic` is Anthropic-shaped. Capabilities differ **per model on the same endpoint** — `mimo-v2.5` (Omni) does images, function calls and structured output; `mimo-v2.5-pro` is text-only and answers an image payload with a 404 whose message is about the model not existing. Thinking is on by default and turned off with `"thinking": {"type": "disabled"}`; the docs use `max_completion_tokens` rather than `max_tokens` |
+| Xiaomi MiMo | Serves both protocols on one host: `/v1` is OpenAI-shaped, `/anthropic` is Anthropic-shaped. Capabilities differ **per model on the same endpoint** — `mimo-v2.5` (Omni) reads images and calls tools; `mimo-v2.5-pro` is text-only. Vision works with the standard `image_url` data-URL form, and `max_tokens` is accepted even though the docs use `max_completion_tokens`. Thinking is on by default (`"thinking": {"type": "disabled"}` turns it off) and the working arrives in `reasoning_content`. **Advertises "Structured Output" but does not honour a JSON Schema**: measured against `response_format: json_schema` with `strict: true`, it returns valid JSON with field names of its own invention rather than the ones the schema requires, and `strict: false` and `json_object` behave the same. JSON, yes; schema conformance, no |
 
 ## Checklist before committing provider code
 

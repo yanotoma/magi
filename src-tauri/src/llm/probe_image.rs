@@ -50,11 +50,22 @@ const SEGMENTS: [[bool; 7]; 10] = [
 
 /// The digit the probe asks about.
 ///
-/// Not 0, 1 or 8. Those are the digits a model is most likely to name when it is
-/// guessing rather than looking — 1 for a narrow mark, 0 and 8 for a closed shape —
-/// and a guess that happens to be right would record vision the model does not
-/// have. 7 has a distinctive open form and is an unlikely blind guess.
-pub const PROBE_DIGIT: u8 = 7;
+/// Two constraints pull in opposite directions, and the first attempt satisfied only
+/// one of them.
+///
+/// It must not be an easy blind guess: 1 is what a model names for any narrow mark,
+/// and 0 and 8 for any closed one, so a guess that happened to be right would record
+/// vision the model does not have.
+///
+/// It must also *look like a digit*. This was 7, chosen for the first constraint —
+/// and 7 is the worst digit in this typeface for the second, because its
+/// seven-segment form lights only two segments and comes out as a corner. Rendered
+/// and looked at, it read as a bracket rather than a number, which invites "a white
+/// shape in the corner" as an answer and a false negative as a result.
+///
+/// 2 lights five segments and gives the unmistakable zigzag of a digital clock. Not
+/// a common blind guess, and unambiguously a numeral.
+pub const PROBE_DIGIT: u8 = 2;
 
 struct Canvas {
     pixels: Vec<u8>,
@@ -79,46 +90,57 @@ impl Canvas {
 }
 
 /// Draws one seven-segment digit, centred.
+///
+/// **Segments overlap at the corners, and must.** The first version inset the
+/// horizontal bars by one thickness at each end *and* started the vertical bars one
+/// thickness below the top — so neither filled the corner square between them, and
+/// a `7` came out as a detached horizontal stroke above a detached vertical one. It
+/// passed every test in this file, because they checked that something was drawn and
+/// that the ten digits differed from each other, and neither of those is legibility.
+///
+/// So horizontals span the full width and verticals run corner to corner. The
+/// overlap costs nothing — a filled pixel filled twice is the same pixel — and it is
+/// what makes the glyph one connected shape, which is the property
+/// `every_digit_is_a_single_connected_shape` now checks.
 fn draw_digit(canvas: &mut Canvas, digit: u8) {
     let lit = SEGMENTS[(digit % 10) as usize];
 
-    // Proportions chosen so the bars are thick relative to the glyph. A thin
-    // seven-segment digit survives downscaling badly, and downscaling is out of
-    // our hands once the image is sent.
-    let thickness = SIZE / 12;
-    let width = SIZE / 2;
-    let height = SIZE * 2 / 3;
+    // Thick and large relative to the canvas. A thin glyph survives a provider's
+    // downscaling badly, and downscaling is out of our hands once the image is sent.
+    let thickness = SIZE / 8;
+    let width = SIZE * 3 / 5;
+    let height = SIZE * 3 / 4;
     let left = (SIZE - width) / 2;
     let top = (SIZE - height) / 2;
-    let middle = top + height / 2 - thickness / 2;
-    let bottom = top + height - thickness;
     let right = left + width - thickness;
+    let middle = top + (height - thickness) / 2;
+    let bottom = top + height - thickness;
 
-    // Horizontal bars are inset by the thickness at each end so corners meet
-    // rather than overlap into a blob.
-    let bar = width - 2 * thickness;
-    let vertical = height / 2 - thickness / 2;
+    // Verticals reach from one horizontal's row through the next, so the corners
+    // are covered whichever pair of segments happens to be lit.
+    let upper = middle - top + thickness;
+    let lower = bottom - middle + thickness;
 
     if lit[0] {
-        canvas.fill(left + thickness, top, bar, thickness); // a — top
+        canvas.fill(left, top, width, thickness); // a — top
     }
     if lit[1] {
-        canvas.fill(right, top + thickness, thickness, vertical); // b — upper right
+        canvas.fill(right, top, thickness, upper); // b — upper right
     }
     if lit[2] {
-        canvas.fill(right, middle + thickness, thickness, vertical); // c — lower right
+        canvas.fill(right, middle, thickness, lower); // c — lower right
     }
     if lit[3] {
-        canvas.fill(left + thickness, bottom, bar, thickness); // d — bottom
+        canvas.fill(left, bottom, width, thickness); // d — bottom
     }
     if lit[4] {
-        canvas.fill(left, middle + thickness, thickness, vertical); // e — lower left
+        canvas.fill(left, middle, thickness, lower); // e — lower left
     }
     if lit[5] {
-        canvas.fill(left, top + thickness, thickness, vertical); // f — upper left
+        canvas.fill(left, top, thickness, upper); // f — upper left
     }
     if lit[6] {
-        canvas.fill(left + thickness, middle, bar, thickness); // g — middle
+        canvas.fill(left, middle, width, thickness); // g — middle
     }
 }
 
@@ -210,6 +232,86 @@ mod tests {
         }
     }
 
+    /// Counts the connected regions of lit pixels, four-connected.
+    fn lit_regions(pixels: &[u8]) -> usize {
+        let mut seen = vec![false; pixels.len()];
+        let mut regions = 0;
+
+        for start in 0..pixels.len() {
+            if pixels[start] != 0xFF || seen[start] {
+                continue;
+            }
+            regions += 1;
+
+            let mut stack = vec![start];
+            seen[start] = true;
+            while let Some(index) = stack.pop() {
+                let (x, y) = (index % SIZE, index / SIZE);
+                let mut push = |nx: usize, ny: usize, stack: &mut Vec<usize>| {
+                    let next = ny * SIZE + nx;
+                    if pixels[next] == 0xFF && !seen[next] {
+                        seen[next] = true;
+                        stack.push(next);
+                    }
+                };
+                if x > 0 {
+                    push(x - 1, y, &mut stack);
+                }
+                if x + 1 < SIZE {
+                    push(x + 1, y, &mut stack);
+                }
+                if y > 0 {
+                    push(x, y - 1, &mut stack);
+                }
+                if y + 1 < SIZE {
+                    push(x, y + 1, &mut stack);
+                }
+            }
+        }
+
+        regions
+    }
+
+    /// The test that would have caught the broken corners.
+    ///
+    /// On a real seven-segment display the lit segments of every digit touch, so the
+    /// glyph is one piece. The first version of `draw_digit` inset the horizontal
+    /// bars and dropped the vertical bars below them, leaving the corner square
+    /// unfilled — a `7` rendered as two separate strokes, which reads as a corner or
+    /// a bracket rather than a digit. Every other test in this file passed.
+    ///
+    /// Legibility is not directly testable. Connectivity is, and it is the property
+    /// that was actually broken.
+    #[test]
+    fn every_digit_is_a_single_connected_shape() {
+        for digit in 0..10u8 {
+            let mut canvas = Canvas::black();
+            draw_digit(&mut canvas, digit);
+            assert_eq!(
+                lit_regions(&canvas.pixels),
+                1,
+                "digit {digit} renders as separate pieces rather than one glyph"
+            );
+        }
+    }
+
+    #[test]
+    fn the_probe_digit_fills_a_useful_share_of_the_frame() {
+        // A legible glyph has to be big enough to survive whatever resizing the
+        // provider does. The earlier geometry drew a small thin mark in a large black
+        // field, which is the shape most likely to be read as "a white shape".
+        let mut canvas = Canvas::black();
+        draw_digit(&mut canvas, PROBE_DIGIT);
+
+        let lit = canvas.pixels.iter().filter(|&&p| p == 0xFF).count();
+        let share = lit as f64 / (SIZE * SIZE) as f64;
+        assert!(
+            share > 0.06,
+            "the digit covers only {:.1}% of the image",
+            share * 100.0
+        );
+    }
+
     #[test]
     fn mirrored_digits_are_told_apart() {
         // 2 and 3 are the pair that caught the flawed comparison above, and 6 and 9
@@ -247,6 +349,23 @@ mod tests {
         // 0, 1 and 8 are what a model names when it is guessing at a mark rather
         // than reading one, and a lucky guess would record vision that is not there.
         assert!(!matches!(PROBE_DIGIT, 0 | 1 | 8));
+    }
+
+    #[test]
+    fn the_probe_digit_looks_like_a_digit_rather_than_a_stroke() {
+        // The other half of choosing a digit, and the half the first choice missed.
+        // 7 lights two segments in this typeface and renders as a corner, which
+        // invites "a white shape" as an answer — a false negative produced by the
+        // probe's own image rather than by the model.
+        let lit = SEGMENTS[(PROBE_DIGIT % 10) as usize]
+            .iter()
+            .filter(|&&on| on)
+            .count();
+        assert!(
+            lit >= 4,
+            "digit {PROBE_DIGIT} lights only {lit} segments, which reads as strokes \
+             rather than a numeral"
+        );
     }
 
     #[test]
