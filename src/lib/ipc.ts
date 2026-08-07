@@ -177,6 +177,86 @@ export const setPromptContext = async (context: string): Promise<ConfigView> =>
 export const setHotkey = async (shortcut: string): Promise<ConfigView> =>
   invoke<ConfigView>("set_hotkey", { shortcut });
 
+/** Which speech model transcribes. Mirrors `stt::Model`. */
+export type SpeechModel = "base-en" | "small-en" | "medium-en";
+
+/**
+ * Whether macOS has granted a permission.
+ *
+ * Four states, not two. `not-asked` is the intended first-run path rather than a
+ * failure, and `restricted` cannot be fixed in System Settings at all — so the UI
+ * must not offer the same advice for both.
+ */
+export type Permission = "not-asked" | "granted" | "denied" | "restricted" | "not-applicable";
+
+export type SpeechModelView = {
+  id: SpeechModel;
+  label: string;
+  description: string;
+  /** Rounded for display; the real length comes from the server at download time. */
+  approximate_mb: number;
+  downloaded: boolean;
+  selected: boolean;
+};
+
+export type VoiceView = {
+  models: SpeechModelView[];
+  /** Whether the selected model is on disk and usable. */
+  ready: boolean;
+  microphone: Permission;
+  microphone_explanation: string;
+  microphone_settings_url: string;
+  /** The model currently downloading, if any. */
+  downloading: SpeechModel | null;
+};
+
+/** How far along a model download is. */
+export type DownloadProgress = { downloaded: number; total: number };
+
+export const getVoice = async (): Promise<VoiceView> => invoke<VoiceView>("get_voice");
+
+/**
+ * Chooses which model transcribes.
+ *
+ * Allowed for a model that has not been downloaded. Refusing until the file exists
+ * would mean picking Small and then separately asking for it, when picking it *is* the
+ * request.
+ */
+export const setSpeechModel = async (model: SpeechModel): Promise<VoiceView> =>
+  invoke<VoiceView>("set_speech_model", { model });
+
+/**
+ * Downloads a model. Resolves when it is on disk and verified.
+ *
+ * Progress arrives on `magi://model-download` meanwhile — see `onDownloadProgress`.
+ */
+export const downloadSpeechModel = async (model: SpeechModel): Promise<VoiceView> =>
+  invoke<VoiceView>("download_speech_model", { model });
+
+export const removeSpeechModel = async (model: SpeechModel): Promise<VoiceView> =>
+  invoke<VoiceView>("remove_speech_model", { model });
+
+/** Opens the System Settings pane for a permission, rather than describing where it is. */
+export const openPermissionSettings = async (kind: "microphone" | "accessibility" | "screen-recording"): Promise<void> =>
+  invoke("open_permission_settings", { kind });
+
+/**
+ * Subscribes to model-download progress.
+ *
+ * Bundled with the completion event so a caller cannot unsubscribe from one and leak
+ * the other.
+ */
+export const onDownloadProgress = async (handlers: {
+  progress: (progress: DownloadProgress) => void;
+  done: () => void;
+}): Promise<UnlistenFn> => {
+  const unlisten = await Promise.all([
+    listen<DownloadProgress>("magi://model-download", (e) => handlers.progress(e.payload)),
+    listen("magi://model-download-done", () => handlers.done()),
+  ]);
+  return () => unlisten.forEach((off) => off());
+};
+
 /** Endpoints common enough to be worth not typing out. */
 export const PRESETS: ReadonlyArray<{
   label: string;

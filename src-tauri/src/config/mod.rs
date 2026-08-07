@@ -174,6 +174,19 @@ pub struct PromptConfig {
     pub context: String,
 }
 
+/// Voice input settings.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct VoiceConfig {
+    /// Which speech model transcribes.
+    ///
+    /// Stored rather than derived from what is on disk, because the two are different
+    /// questions: a user who downloaded `small.en` and then switched back to `base.en`
+    /// still has both files, and the choice is theirs rather than whichever happens to
+    /// be present.
+    pub model: crate::stt::Model,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -182,6 +195,9 @@ pub struct Config {
 
     #[serde(default)]
     pub hotkey: HotkeyConfig,
+
+    #[serde(default)]
+    pub voice: VoiceConfig,
 
     #[serde(default)]
     pub prompt: PromptConfig,
@@ -209,6 +225,7 @@ impl Default for Config {
         Self {
             schema_version: CURRENT_SCHEMA_VERSION,
             hotkey: HotkeyConfig::default(),
+            voice: VoiceConfig::default(),
             prompt: PromptConfig::default(),
             appearance: AppearanceConfig::default(),
             active: None,
@@ -334,6 +351,42 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_voice_model_defaults_to_the_smallest_download() {
+        // First run. 1.4 GB is not a first-run experience.
+        let config = Config::from_toml("").expect("an empty file is valid");
+        assert_eq!(config.voice.model, crate::stt::Model::BaseEn);
+    }
+
+    #[test]
+    fn the_voice_model_round_trips_through_toml() {
+        let config = Config::from_toml(
+            r#"
+            [voice]
+            model = "small-en"
+            "#,
+        )
+        .expect("valid");
+        assert_eq!(config.voice.model, crate::stt::Model::SmallEn);
+
+        // And survives a write, which is what `set_speech_model` depends on.
+        let written = toml::to_string_pretty(&config).expect("serialisable");
+        assert!(written.contains("small-en"), "got:\n{written}");
+    }
+
+    #[test]
+    fn an_unknown_model_name_is_refused_rather_than_defaulted() {
+        // Silently falling back would transcribe with a model the user did not pick and
+        // give no clue why their choice was ignored.
+        assert!(Config::from_toml(
+            r#"
+            [voice]
+            model = "large-v3"
+            "#,
+        )
+        .is_err());
+    }
 
     #[test]
     fn prompt_context_defaults_to_empty() {

@@ -83,8 +83,16 @@ pub fn run() {
                 .as_ref()
                 .and_then(|a| capabilities.tier(&a.provider, &a.model));
 
+            // Speech models live beside the config but not in it: a 141 MB binary blob
+            // has no business next to a file the user is encouraged to open in an
+            // editor and paste into bug reports.
+            let models_dir = app.path().app_data_dir()?.join("models");
+
             app.manage(AppState {
                 http: reqwest::Client::new(),
+                http_blocking: reqwest::blocking::Client::new(),
+                models_dir,
+                downloading: Mutex::new(None),
                 config: Mutex::new(config),
                 config_dir,
                 secrets: std::sync::Arc::new(KeyringStore),
@@ -129,6 +137,11 @@ pub fn run() {
             commands::set_show_thinking,
             commands::set_prompt_context,
             commands::set_hotkey,
+            commands::get_voice,
+            commands::set_speech_model,
+            commands::download_speech_model,
+            commands::remove_speech_model,
+            commands::open_permission_settings,
             commands::send_text_turn,
             commands::cancel_turn,
         ])

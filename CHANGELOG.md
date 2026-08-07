@@ -6,6 +6,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+- **Local speech-to-text.** Settings → Voice picks a model — Base, Small or Medium — downloads it with a progress bar, and shows whether your microphone is available. Transcription runs entirely on your Mac; no audio is sent anywhere
+- The microphone permission is shown as a live status row rather than discovered when a recording fails, with a button that opens the right System Settings pane
+- Downloaded models can be deleted again
+
 ### Changed
 - macOS 11 (Big Sur) is now the minimum. The speech engine needs a newer system library than Tauri's default of macOS 10.13 allowed, and 11 is the first release that runs on Apple Silicon — which is what Magi is built and tested for
 

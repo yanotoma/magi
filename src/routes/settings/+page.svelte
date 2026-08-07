@@ -10,7 +10,16 @@
     setHotkey,
     discoverModels,
     runPreflight,
+    getVoice,
+    setSpeechModel,
+    downloadSpeechModel,
+    removeSpeechModel,
+    openPermissionSettings,
+    onDownloadProgress,
     type ModelCapability,
+    type VoiceView,
+    type SpeechModel,
+    type DownloadProgress,
     MAX_PROMPT_CONTEXT,
     PRESETS,
     type ConfigView,
@@ -21,11 +30,12 @@
   import { acceleratorFrom, describeShortcut } from "$lib/shortcut";
   import Icon from "$lib/Icon.svelte";
 
-  type Pane = "general" | "models" | "hotkeys";
+  type Pane = "general" | "models" | "voice" | "hotkeys";
 
   const PANES: ReadonlyArray<{ id: Pane; label: string }> = [
     { id: "general", label: "General" },
     { id: "models", label: "Models" },
+    { id: "voice", label: "Voice" },
     { id: "hotkeys", label: "Hotkeys" },
   ];
 
@@ -42,6 +52,10 @@
   let discovering = $state(false);
   let discovered = $state<string | null>(null);
   let capturing = $state(false);
+
+  let voice = $state<VoiceView | null>(null);
+  let progress = $state<DownloadProgress | null>(null);
+  let voiceError = $state<string | null>(null);
 
   /** Which model is being probed, or null.
    *
@@ -178,6 +192,50 @@
     clearTimeout(contextTimer);
     contextTimer = setTimeout(flushContext, 600);
   };
+
+  const loadVoice = async () => {
+    try {
+      voice = await getVoice();
+    } catch (e) {
+      voiceError = String(e);
+    }
+  };
+
+  // Read once on mount, and again whenever the pane is opened: the microphone
+  // permission can change in System Settings while this window sits in the
+  // background, and a stale "blocked" row would have the user granting it twice.
+  $effect(() => {
+    if (pane === "voice") loadVoice();
+  });
+
+  // Progress arrives whether or not this pane is open, so the subscription is not tied
+  // to it — a download started and then navigated away from still finishes, and coming
+  // back should find the bar where it actually is.
+  $effect(() => {
+    let stop: (() => void) | undefined;
+    onDownloadProgress({
+      progress: (p) => (progress = p),
+      done: () => {
+        progress = null;
+        loadVoice();
+      },
+    }).then((off) => (stop = off));
+    return () => stop?.();
+  });
+
+  const runVoice = async (action: () => Promise<VoiceView>) => {
+    voiceError = null;
+    try {
+      voice = await action();
+    } catch (e) {
+      voiceError = String(e);
+    }
+  };
+
+  const percent = (p: DownloadProgress): number =>
+    p.total === 0 ? 0 : Math.min(100, Math.round((p.downloaded / p.total) * 100));
+
+  const megabytes = (bytes: number): string => `${Math.round(bytes / 1_000_000)} MB`;
 
   /** Probe results for one model, or undefined when it has not been tested. */
   const capabilityFor = (
@@ -529,6 +587,110 @@
         <p class="hint">
           Safe to share: API keys are in the macOS keychain, never in this file.
         </p>
+      {/if}
+    {/if}
+
+    {#if pane === "voice"}
+      <h2>Microphone</h2>
+      {#if voice}
+        <!--
+          A status row rather than a message that appears when something fails. Every
+          macOS permission fails silently, so the only way a user learns the state is
+          by being shown it.
+        -->
+        <div class="perm-row">
+          <span class="badge {voice.microphone}">{voice.microphone.replace("-", " ")}</span>
+          <span class="hint">{voice.microphone_explanation}</span>
+        </div>
+
+        <!--
+          Offered only where it helps. `restricted` means a configuration profile on a
+          managed Mac, and the pane it would open holds a toggle the user cannot move.
+        -->
+        {#if voice.microphone === "denied"}
+          <button type="button" onclick={() => openPermissionSettings("microphone")}>
+            Open Privacy &amp; Security
+          </button>
+        {/if}
+
+        <h2 class="spaced">Speech model</h2>
+        <p class="hint">
+          Transcription happens on this Mac. Nothing you say is sent anywhere.
+        </p>
+
+        {#if voiceError}
+          <p class="error" role="alert">{voiceError}</p>
+        {/if}
+
+        <ul class="speech-models">
+          {#each voice.models as model (model.id)}
+            <li>
+              <div class="row">
+                <button
+                  type="button"
+                  class="speech-choice"
+                  class:selected={model.selected}
+                  onclick={() => runVoice(() => setSpeechModel(model.id))}
+                >
+                  <span class="bullet" aria-hidden="true">{model.selected ? "●" : ""}</span>
+                  <span class="ident">
+                    <strong>{model.label}</strong>
+                    <span class="hint">{model.description}</span>
+                  </span>
+                </button>
+
+                <div class="actions">
+                  {#if voice.downloading === model.id}
+                    <span class="hint">
+                      {progress ? `${percent(progress)}%` : "Starting…"}
+                    </span>
+                  {:else if model.downloaded}
+                    <span class="badge granted">On disk</span>
+                    <button
+                      type="button"
+                      class="icon danger"
+                      title="Delete {model.label}"
+                      aria-label="Delete {model.label}"
+                      onclick={() => runVoice(() => removeSpeechModel(model.id))}
+                    >
+                      <Icon name="trash" />
+                    </button>
+                  {:else}
+                    <button
+                      type="button"
+                      disabled={voice.downloading !== null}
+                      onclick={() => runVoice(() => downloadSpeechModel(model.id))}
+                    >
+                      Download {megabytes(model.approximate_mb * 1_000_000)}
+                    </button>
+                  {/if}
+                </div>
+              </div>
+
+              {#if voice.downloading === model.id && progress}
+                <!-- A real bar, not a spinner. 465 MB deserves to be told how far along
+                     it is, and the byte counts are what make a stalled download
+                     visible. -->
+                <div class="bar" role="progressbar" aria-valuenow={percent(progress)}>
+                  <div class="bar-fill" style="width: {percent(progress)}%"></div>
+                </div>
+                <p class="hint">
+                  {megabytes(progress.downloaded)} of {megabytes(progress.total)} — leaving
+                  this screen will not stop it
+                </p>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+
+        {#if !voice.ready}
+          <p class="hint">
+            The selected model is not downloaded yet, so voice input is unavailable
+            until it is.
+          </p>
+        {/if}
+      {:else if voiceError}
+        <p class="error" role="alert">{voiceError}</p>
       {/if}
     {/if}
 
@@ -1443,6 +1605,83 @@
     /* A long model id wraps rather than stretching the card sideways — OpenRouter
        ids like "meta-llama/llama-3.3-70b-instruct:free" are routinely this long. */
     overflow-wrap: anywhere;
+  }
+
+  .perm-row {
+    align-items: baseline;
+    display: flex;
+    gap: var(--gap-sm);
+    margin-bottom: var(--gap-sm);
+  }
+
+  /* The permission states, using the same tone scale as the capability tiers so a
+     colour means one thing across the whole app. Always beside a written label. */
+  .badge.granted {
+    background: var(--tone-good);
+  }
+
+  .badge.denied,
+  .badge.restricted {
+    background: var(--tone-bad);
+  }
+
+  .badge.not-asked {
+    background: var(--tone-neutral);
+  }
+
+  .speech-models {
+    list-style: none;
+    margin: var(--gap-sm) 0 0;
+    padding: 0;
+  }
+
+  .speech-models li {
+    border-top: 1px solid var(--line);
+    padding: var(--gap-md) 0;
+  }
+
+  .speech-models li:first-child {
+    border-top: none;
+  }
+
+  /* The name and its trade-off are one target: choosing a model is the action, and a
+     separate radio would be a smaller thing to hit for the same result. */
+  .speech-choice {
+    align-items: baseline;
+    background: none;
+    border: none;
+    color: inherit;
+    display: flex;
+    flex: 1;
+    font: inherit;
+    gap: 6px;
+    min-width: 0;
+    padding: 0;
+    text-align: left;
+  }
+
+  .speech-choice:hover {
+    background: none;
+  }
+
+  .speech-choice.selected strong {
+    color: AccentColor;
+  }
+
+  .bar {
+    background: var(--line);
+    border-radius: var(--radius-control);
+    height: 5px;
+    margin-top: var(--gap-sm);
+    overflow: hidden;
+  }
+
+  .bar-fill {
+    background: AccentColor;
+    height: 100%;
+    /* Eased, because progress arriving in 256 kB chunks would otherwise step visibly
+       rather than move. */
+    transition: width 200ms linear;
   }
 
   /* The capability matrix. A table because it is one: models down, capabilities

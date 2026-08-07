@@ -10,7 +10,7 @@
 //! anything. `cpal` opening a stream is what triggers the microphone prompt, and this
 //! module only answers "what is the state now".
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Whether a permission has been granted, refused, or never asked for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -79,7 +79,10 @@ pub fn settings_url(kind: PermissionKind) -> &'static str {
 }
 
 /// Which permission is being asked about.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// `Deserialize` as well as `Serialize`: this crosses the IPC boundary in both
+/// directions — out in a status view, and back in as the argument naming which System
+/// Settings pane to open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PermissionKind {
     Microphone,

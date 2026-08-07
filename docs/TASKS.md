@@ -5,7 +5,7 @@ Complete breakdown of what is done and what is pending, across every milestone.
 **Last updated:** 2026-08-07
 **Current phase:** M4 — audio and speech-to-text, targeting `0.3.0-alpha.1`
 **Current version:** `0.2.0-alpha.2` (released — see [VERSIONING.md](VERSIONING.md))
-**Overall:** 87 / 147 tasks done (59%)
+**Overall:** 90 / 149 tasks done (60%)
 
 Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 
@@ -19,11 +19,11 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 | **M1** | Shell — tray, hotkey, windows | `0.1.0-alpha.1` | 15 | 16 | ✅ Shipped |
 | **M2** | Config & providers | `0.2.0-alpha.1` | 28 | 28 | ✅ Shipped |
 | **M3** | Pre-flight & capability tiers | `0.2.0-alpha.2` | 13 | 14 | ✅ Shipped |
-| **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 16 | 17 | 🔨 Next |
+| **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 19 | 19 | 🔨 Next |
 | **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 0 | 13 | ⬜ |
 | **M6** | Session machine & panel UX | `0.5.0-beta.1` | 0 | 16 | ⬜ |
 | **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 14 | ⬜ |
-| — | **v1 total** | `1.0.0` | **87** | **133** | |
+| — | **v1 total** | `1.0.0` | **90** | **135** | |
 | **M8** | v2 — wake word & TTS | `1.1.0` | 0 | 9 | 🔮 Post-v1 |
 | **M9** | v3 — computer use | `1.2.0` | 0 | 5 | 🔮 Post-v1 |
 
@@ -171,7 +171,9 @@ Two bugs the milestone only surfaced when run, both worth remembering:
 - [x] First-run model download with progress, resumable, checksum-verified. The resume path was verified against the real endpoint by seeding a 20 MB partial file and confirming the completed download passed its checksum — that is the one failure a happy-path test cannot catch, since resuming from a wrong offset yields a file of exactly the right length and the wrong contents
 - [x] Verify against the checksum from HuggingFace's API, **never the ETag** on the download URL. Both are 64 hex characters and they are different values, so the wrong one fails every download on every machine and reads as a corrupt network
 - [x] Trust the server's `content-length` rather than a hardcoded size. Two of the size constants were initially wrong by ~12 kB, which would have made a *completed* download look longer than the model and be discarded on every attempt, forever
-- [ ] Model selection in Settings (`base.en` default, `small`, `medium`)
+- [x] Model selection in Settings → Voice, with a real progress bar and byte counts. Selecting a model that is not downloaded is allowed — refusing until the file exists would mean picking Small and then separately asking for it, when picking it *is* the request
+- [x] Microphone permission shown as a live status row, with a button to the right System Settings pane — offered only when it would help, since `restricted` opens a toggle the user cannot move
+- [x] Delete a downloaded model. `medium.en` is 1.4 GB, and an app that can put that on your disk and not take it off again quietly costs you space forever
 - [x] `Transcriber::transcribe` is synchronous so the `spawn_blocking` obligation is explicit at the call site; inference uses half the cores rather than all of them, since Magi transcribes while the user is still working
 - [x] `Transcriber` trait plus a fake. Synchronous on purpose — inference is CPU-bound for seconds, so making it `async` would suggest it yields when it would in fact occupy a runtime thread throughout. Rejects Whisper's known silence artefacts ("Thank you.", "[BLANK_AUDIO]"), matched on the whole string so a real question containing a polite phrase survives
 - [x] Microphone permission request and denial handling. `NSMicrophoneUsageDescription` in a `src-tauri/Info.plist` that Tauri merges — without it the process is **terminated** on first microphone access, with no exception and nothing on screen for a tray app. The state is read without prompting via `AVCaptureDevice.authorizationStatusForMediaType`, so Settings shows what is true rather than finding out when a recording fails
