@@ -71,7 +71,7 @@ pub fn run() {
                 http: reqwest::Client::new(),
                 config: Mutex::new(config),
                 config_dir,
-                secrets: Box::new(KeyringStore),
+                secrets: std::sync::Arc::new(KeyringStore),
                 key_hints: Mutex::new(std::collections::HashMap::new()),
                 in_flight: Mutex::new(None),
             });
@@ -96,6 +96,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_config,
+            commands::get_appearance,
             commands::save_provider,
             commands::remove_provider,
             commands::set_active_model,

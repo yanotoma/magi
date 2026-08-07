@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use tauri::Emitter;
@@ -26,7 +26,9 @@ pub struct AppState {
     pub http: reqwest::Client,
     pub config: Mutex<Config>,
     pub config_dir: PathBuf,
-    pub secrets: Box<dyn SecretStore>,
+    /// `Arc` rather than `Box` so it can be cloned into a blocking task. Reading
+    /// the keychain must not happen on the main thread — see [`key_hints`].
+    pub secrets: Arc<dyn SecretStore>,
 
     /// Fingerprints of stored keys, by provider id.
     ///
@@ -100,32 +102,100 @@ pub struct SaveProviderRequest {
     pub api_key: Option<String>,
 }
 
-/// The fingerprint of a provider's stored key, reading the keychain at most once.
+/// Fingerprints for the given providers, reading the keychain off the main thread.
+///
+/// The thread matters more than anything else here. Reading the keychain is a
+/// synchronous Mach round trip to `securityd`, and when the ACL does not already
+/// permit this binary, `securityd` blocks until the user answers an access
+/// dialog. On the main thread that is an unbreakable deadlock rather than a
+/// pause: the main thread is the only one that can present and service UI, so it
+/// ends up waiting for an answer to a dialog only it could have drawn. Magi runs
+/// as an accessory app with no Dock icon, which removes even the chance of the
+/// user finding the prompt behind another window. The symptom is a spinning
+/// cursor over a dead tray icon and a hotkey that does nothing.
+///
+/// So the read goes to a blocking task, and the main thread keeps pumping events
+/// while the dialog is up.
 ///
 /// A keychain error is treated as "no key" rather than surfaced: Settings must
 /// still render so the user can fix whatever is wrong, and a locked keychain
 /// should not blank the whole screen.
-fn key_hint(state: &State<'_, AppState>, provider_id: &str) -> Option<String> {
-    if let Ok(cache) = state.key_hints.lock() {
-        if let Some(cached) = cache.get(provider_id) {
-            return cached.clone();
+async fn key_hints(
+    state: &State<'_, AppState>,
+    provider_ids: &[String],
+) -> CommandResult<HashMap<String, Option<String>>> {
+    let mut resolved: HashMap<String, Option<String>> = HashMap::new();
+    let mut missing: Vec<String> = Vec::new();
+
+    {
+        let cache = state.key_hints.lock().map_err(to_message)?;
+        for id in provider_ids {
+            match cache.get(id) {
+                Some(hint) => {
+                    resolved.insert(id.clone(), hint.clone());
+                }
+                None => missing.push(id.clone()),
+            }
         }
     }
 
-    let hint = state
-        .secrets
-        .get(provider_id)
-        .ok()
-        .flatten()
-        .filter(|k| !k.is_empty())
-        .as_deref()
-        .map(crate::config::secrets::fingerprint);
-
-    if let Ok(mut cache) = state.key_hints.lock() {
-        cache.insert(provider_id.to_string(), hint.clone());
+    // Every fingerprint was cached, so there is nothing to read and no reason to
+    // pay for a task. This is the common path: the cache only misses once per
+    // provider per run.
+    if missing.is_empty() {
+        return Ok(resolved);
     }
 
-    hint
+    let store = Arc::clone(&state.secrets);
+    let fetched = tauri::async_runtime::spawn_blocking(move || {
+        missing
+            .into_iter()
+            .map(|id| {
+                let hint = store
+                    .get(&id)
+                    .ok()
+                    .flatten()
+                    .filter(|k| !k.is_empty())
+                    .as_deref()
+                    .map(crate::config::secrets::fingerprint);
+                (id, hint)
+            })
+            .collect::<HashMap<String, Option<String>>>()
+    })
+    .await
+    .map_err(to_message)?;
+
+    if let Ok(mut cache) = state.key_hints.lock() {
+        for (id, hint) in &fetched {
+            cache.insert(id.clone(), hint.clone());
+        }
+    }
+
+    resolved.extend(fetched);
+    Ok(resolved)
+}
+
+/// Runs one keychain operation off the calling thread.
+///
+/// Every call into the keychain — read, write or delete — is a synchronous Mach
+/// round trip that can stop until the user answers an access dialog. None of them
+/// belong on the main thread, for the reason spelled out on [`key_hints`], and
+/// none belong on an async runtime thread either, where a blocked worker starves
+/// whatever else that runtime was going to poll.
+///
+/// Having a single funnel is deliberate. The bug this was written for came from
+/// one keychain call in one command being on the wrong thread; a helper makes the
+/// right thing shorter to write than the wrong thing.
+async fn with_secrets<T, F>(state: &State<'_, AppState>, operation: F) -> CommandResult<T>
+where
+    F: FnOnce(&dyn SecretStore) -> Result<T, crate::config::secrets::SecretError> + Send + 'static,
+    T: Send + 'static,
+{
+    let store = Arc::clone(&state.secrets);
+    tauri::async_runtime::spawn_blocking(move || operation(store.as_ref()))
+        .await
+        .map_err(to_message)?
+        .map_err(to_message)
 }
 
 /// Drops a cached fingerprint after the underlying key changed.
@@ -135,16 +205,34 @@ fn forget_key_hint(state: &State<'_, AppState>, provider_id: &str) {
     }
 }
 
+/// The whole configuration, including a fingerprint of each stored key.
+///
+/// Asynchronous because it reads the keychain, which must not happen on the main
+/// thread — see [`key_hints`]. Callers that only need the appearance settings
+/// should use [`get_appearance`] instead and touch no secrets at all.
 #[tauri::command]
-pub fn get_config(state: State<'_, AppState>) -> CommandResult<ConfigView> {
-    let config = state.config.lock().map_err(to_message)?;
+pub async fn get_config(state: State<'_, AppState>) -> CommandResult<ConfigView> {
+    // Snapshot under the lock, then release it. A `std::sync::MutexGuard` held
+    // across an `await` would be held for as long as the keychain takes, which is
+    // unbounded when a dialog is up — every other command would block behind it.
+    let (providers, active, hotkey, prompt, appearance) = {
+        let config = state.config.lock().map_err(to_message)?;
+        (
+            config.providers.clone(),
+            config.active.clone(),
+            config.hotkey.toggle.clone(),
+            config.prompt.clone(),
+            config.appearance.clone(),
+        )
+    };
 
-    let providers = config
-        .providers
+    let ids: Vec<String> = providers.iter().map(|p| p.id.clone()).collect();
+    let hints = key_hints(&state, &ids).await?;
+
+    let providers = providers
         .iter()
         .map(|p| {
-            // One keychain read per provider, at most, and none once cached.
-            let hint = key_hint(&state, &p.id);
+            let hint = hints.get(&p.id).cloned().flatten();
             ProviderView {
                 id: p.id.clone(),
                 kind: match p.kind {
@@ -162,19 +250,33 @@ pub fn get_config(state: State<'_, AppState>) -> CommandResult<ConfigView> {
 
     Ok(ConfigView {
         providers,
-        active: config.active.clone(),
-        hotkey: config.hotkey.toggle.clone(),
-        prompt: config.prompt.clone(),
-        appearance: config.appearance.clone(),
+        active,
+        hotkey,
+        prompt,
+        appearance,
         // Shown in Settings so the file is discoverable. A config nobody can
         // find is a config nobody can paste into a bug report.
         config_path: Config::path_in(&state.config_dir).display().to_string(),
     })
 }
 
+/// The appearance settings alone, touching no secrets.
+///
+/// Exists so the panel does not have to call [`get_config`]. The panel is created
+/// hidden at launch, so its first request runs before there is any window on
+/// screen — and when that request read the keychain, launching Magi meant a
+/// keychain dialog with no window to attach to and no way for the user to reach
+/// it. The panel needs one boolean; asking for the whole configuration to get it
+/// dragged the secret store into the startup path for no reason.
+#[tauri::command]
+pub fn get_appearance(state: State<'_, AppState>) -> CommandResult<AppearanceConfig> {
+    let config = state.config.lock().map_err(to_message)?;
+    Ok(config.appearance.clone())
+}
+
 /// Adds a provider, or replaces one with the same id.
 #[tauri::command]
-pub fn save_provider(
+pub async fn save_provider(
     state: State<'_, AppState>,
     request: SaveProviderRequest,
 ) -> CommandResult<ConfigView> {
@@ -198,24 +300,19 @@ pub fn save_provider(
 
     if let Some(key) = request.api_key {
         forget_key_hint(&state, &request.provider.id);
+        let id = request.provider.id.clone();
         if key.is_empty() {
-            state
-                .secrets
-                .delete(&request.provider.id)
-                .map_err(to_message)?;
+            with_secrets(&state, move |store| store.delete(&id)).await?;
         } else {
-            state
-                .secrets
-                .set(&request.provider.id, &key)
-                .map_err(to_message)?;
+            with_secrets(&state, move |store| store.set(&id, &key)).await?;
         }
     }
 
-    get_config(state)
+    get_config(state).await
 }
 
 #[tauri::command]
-pub fn remove_provider(state: State<'_, AppState>, id: String) -> CommandResult<ConfigView> {
+pub async fn remove_provider(state: State<'_, AppState>, id: String) -> CommandResult<ConfigView> {
     {
         let mut config = state.config.lock().map_err(to_message)?;
         config.providers.retain(|p| p.id != id);
@@ -232,13 +329,14 @@ pub fn remove_provider(state: State<'_, AppState>, id: String) -> CommandResult<
     // Orphaned secrets are worth cleaning up: a key nobody can see is a key
     // nobody remembers to revoke.
     forget_key_hint(&state, &id);
-    state.secrets.delete(&id).map_err(to_message)?;
+    let orphaned = id.clone();
+    with_secrets(&state, move |store| store.delete(&orphaned)).await?;
 
-    get_config(state)
+    get_config(state).await
 }
 
 #[tauri::command]
-pub fn set_active_model(
+pub async fn set_active_model(
     state: State<'_, AppState>,
     provider: String,
     model: String,
@@ -260,7 +358,7 @@ pub fn set_active_model(
         }
     }
 
-    get_config(state)
+    get_config(state).await
 }
 
 /// Asks a provider which models it serves.
@@ -278,7 +376,10 @@ pub async fn discover_models(
     // rediscovering an existing provider does not mean retyping its key.
     let key = match api_key.filter(|k| !k.is_empty()) {
         Some(typed) => Some(typed),
-        None => state.secrets.get(&provider.id).map_err(to_message)?,
+        None => {
+            let id = provider.id.clone();
+            with_secrets(&state, move |store| store.get(&id)).await?
+        }
     };
 
     discovery::discover_models(&state.http, &provider, key.as_deref()).await
@@ -286,7 +387,7 @@ pub async fn discover_models(
 
 /// Applies a theme to every window and remembers it.
 #[tauri::command]
-pub fn set_theme(
+pub async fn set_theme(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     theme: Theme,
@@ -298,7 +399,7 @@ pub fn set_theme(
     }
 
     apply_theme(&app, theme);
-    get_config(state)
+    get_config(state).await
 }
 
 /// Pushes the theme down to the webviews.
@@ -357,7 +458,7 @@ fn system_prompt(context: &str) -> String {
 
 /// Replaces the standing context sent with every turn.
 #[tauri::command]
-pub fn set_prompt_context(
+pub async fn set_prompt_context(
     state: State<'_, AppState>,
     context: String,
 ) -> CommandResult<ConfigView> {
@@ -373,7 +474,7 @@ pub fn set_prompt_context(
             return Err(to_message(error));
         }
     }
-    get_config(state)
+    get_config(state).await
 }
 
 /// Rebinds the global shortcut, or reports why it could not be.
@@ -382,7 +483,7 @@ pub fn set_prompt_context(
 /// registered would show in Settings as the current hotkey while doing nothing —
 /// the config would be a record of an intention rather than of the state.
 #[tauri::command]
-pub fn set_hotkey(
+pub async fn set_hotkey(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     shortcut: String,
@@ -410,18 +511,21 @@ pub fn set_hotkey(
         }
     }
 
-    get_config(state)
+    get_config(state).await
 }
 
 /// Turns the reasoning display on or off.
 #[tauri::command]
-pub fn set_show_thinking(state: State<'_, AppState>, show: bool) -> CommandResult<ConfigView> {
+pub async fn set_show_thinking(
+    state: State<'_, AppState>,
+    show: bool,
+) -> CommandResult<ConfigView> {
     {
         let mut config = state.config.lock().map_err(to_message)?;
         config.appearance.show_thinking = show;
         config.save(&state.config_dir).map_err(to_message)?;
     }
-    get_config(state)
+    get_config(state).await
 }
 
 /// Sends one text turn and streams the reply back as events.
@@ -446,10 +550,9 @@ pub async fn send_text_turn(
         (provider.clone(), model.to_string(), system)
     };
 
-    let api_key = state
-        .secrets
-        .get(&provider_config.id)
-        .map_err(to_message)?
+    let provider_id = provider_config.id.clone();
+    let api_key = with_secrets(&state, move |store| store.get(&provider_id))
+        .await?
         .filter(|k| !k.is_empty());
 
     if provider_config.requires_key && api_key.is_none() {

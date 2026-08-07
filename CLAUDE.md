@@ -31,7 +31,7 @@ Check documentation with the context7 MCP server rather than recalled knowledge 
 ## Hard rules
 
 - **No `unwrap()` or `expect()`** outside tests and setup code. A panic in a background tray app is invisible: the hotkey silently stops working with no window to crash and no terminal to print to.
-- **Never block the Tauri main thread.** Whisper inference and screen capture go to `spawn_blocking`.
+- **Never block the Tauri main thread.** Whisper inference, screen capture, and **every keychain call** go to `spawn_blocking`. The keychain is the one that gets missed, because `store.get(id)` reads like a cheap getter and is actually a synchronous round trip to `securityd` that stops until the user answers an access dialog. A blocked main thread cannot draw the dialog it is waiting for, so the app deadlocks outright — spinning cursor, dead tray icon, hotkey does nothing, and no error anywhere. Note that a synchronous `#[tauri::command] fn` runs **on the main thread**: anything reaching the keychain must be `async` and go through `commands::with_secrets`.
 - **No test may require** a GPU, microphone, display, or network. Every hardware- or network-touching module sits behind a trait with a fake.
 - **API keys never touch `config.toml`.** They live in the OS keychain via `keyring`, so users can safely paste configs into bug reports.
 - **Adding a plugin means adding its capability permissions in the same commit.** A registered Tauri v2 plugin missing from a capability file fails at runtime, not compile time.

@@ -65,6 +65,18 @@ export type ProviderInput = {
 export const getConfig = async (): Promise<ConfigView> => invoke<ConfigView>("get_config");
 
 /**
+ * The appearance settings alone, reading no secrets.
+ *
+ * The panel uses this instead of `getConfig`. `getConfig` reports a fingerprint
+ * for every stored key, so it reads the keychain — and the panel is created
+ * hidden at launch, which made starting Magi trigger a keychain prompt before any
+ * window existed to attach it to. Asking for the whole configuration to read one
+ * boolean pulled the secret store into the startup path for nothing.
+ */
+export const getAppearance = async (): Promise<AppearanceConfig> =>
+  invoke<AppearanceConfig>("get_appearance");
+
+/**
  * Adds a provider, or replaces the one with the same id.
  *
  * `apiKey` of `undefined` leaves any stored key untouched, so editing a

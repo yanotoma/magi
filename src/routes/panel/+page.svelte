@@ -1,7 +1,7 @@
 <script lang="ts">
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import MagiSpinner from "$lib/MagiSpinner.svelte";
-  import { cancelTurn, getConfig, onTurnEvents, sendTextTurn } from "$lib/ipc";
+  import { cancelTurn, getAppearance, onTurnEvents, sendTextTurn } from "$lib/ipc";
   import { renderMarkdown } from "$lib/markdown";
   import {
     appendThinking,
@@ -37,9 +37,14 @@
 
   // The panel reads its own copy of the setting: Settings is a separate window,
   // and this one is not reloaded when that one changes.
+  //
+  // `getAppearance` rather than `getConfig`, and the difference is not cosmetic.
+  // This window is created hidden at launch, so this request runs before anything
+  // is on screen — and `getConfig` reads the keychain, which meant every launch
+  // asked for keychain access with no window to show the prompt against.
   $effect(() => {
-    getConfig()
-      .then((config) => (showThinking = config.appearance.show_thinking))
+    getAppearance()
+      .then((appearance) => (showThinking = appearance.show_thinking))
       .catch(() => {});
   });
 
