@@ -2,10 +2,10 @@
 
 Complete breakdown of what is done and what is pending, across every milestone.
 
-**Last updated:** 2026-08-06
-**Current phase:** M2 — the text loop works end to end; manual verification pending
+**Last updated:** 2026-08-07
+**Current phase:** M2 — code complete, awaiting manual verification before `0.2.0-alpha.1`
 **Current version:** `0.1.0-alpha.1` (released — see [VERSIONING.md](VERSIONING.md))
-**Overall:** 57 / 144 tasks done (40%)
+**Overall:** 57 / 143 tasks done (40%)
 
 Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 
@@ -17,13 +17,13 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 |---|---|---|---:|---:|---|
 | **M0** | Foundations | — | 15 | 15 | ✅ Complete |
 | **M1** | Shell — tray, hotkey, windows | `0.1.0-alpha.1` | 15 | 16 | ✅ Shipped |
-| **M2** | Config & providers | `0.2.0-alpha.1` | 27 | 28 | 🔨 In progress |
+| **M2** | Config & providers | `0.2.0-alpha.1` | 27 | 27 | 🔍 Verifying |
 | **M3** | Pre-flight & capability tiers | `0.2.0-alpha.1` | 0 | 14 | ⬜ |
 | **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 0 | 14 | ⬜ |
 | **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 0 | 13 | ⬜ |
 | **M6** | Session machine & panel UX | `0.5.0-beta.1` | 0 | 16 | ⬜ |
 | **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 14 | ⬜ |
-| — | **v1 total** | `1.0.0` | **57** | **130** | |
+| — | **v1 total** | `1.0.0` | **57** | **129** | |
 | **M8** | v2 — wake word & TTS | `1.1.0` | 0 | 9 | 🔮 Post-v1 |
 | **M9** | v3 — computer use | `1.2.0` | 0 | 5 | 🔮 Post-v1 |
 
@@ -94,7 +94,6 @@ The milestone was widened from pure infrastructure for one reason: with the orig
 - [x] Config versioning and a migration path (needed before the first public release, not after)
 - [x] Write defaults on first run
 - [x] Store and retrieve API keys via `keyring`, never in the TOML
-- [ ] Optional OAuth sign-in for Anthropic as an alternative to a pasted key (`Authorization: Bearer` + `anthropic-beta: oauth-2025-04-20`, short-lived tokens, refresh handling). Still billed as API usage — it removes key-pasting friction, not cost
 - [x] Provider registry — resolves a config to an implementation by protocol. Keyed by `kind`, not by vendor: Xiaomi serves both protocols on one host, so a vendor-keyed registry would have to pick one
 - [x] Model discovery via `GET /v1/models`, so adding a provider does not mean typing model names by hand
 - [x] Model picker in Settings — clicking a model chip activates it. A picker inside the panel waits for M6, when there is a reason to switch mid-conversation
@@ -272,7 +271,8 @@ Recorded so they are not re-proposed.
 
 | Idea | Why not |
 |---|---|
-| Use a Claude Pro/Max subscription instead of an API key | The subscription covers claude.ai and Claude Code, not third-party API clients. Reusing their stored credentials means reverse-engineering a private auth flow, violates the terms, and breaks without warning. |
+| Use a Claude Pro/Max subscription instead of an API key | The subscription covers claude.ai and Claude Code, not third-party API clients. Reusing their stored credentials means reverse-engineering a private auth flow, violates the terms, and breaks without warning. **Confirmed since:** Anthropic began blocking third-party Max OAuth on 2026-01-09 and its legal-compliance page now states plainly that consumer OAuth tokens in any other product "constitutes a violation of the Consumer Terms of Service". opencode removed the feature in February 2026 citing legal requests. Declining this in M0 turned out to be the only path that did not need undoing. |
+| OAuth sign-in for Anthropic as an alternative to a pasted key | Was an M2 task; removed as **not implementable**, not merely unwise. Anthropic runs no OAuth program for third-party applications and offers no way to register a client id, so the only route is to reuse Claude Code's hard-coded one — which is the rejected approach above wearing a different name. The three supported methods are API keys, Workload Identity Federation (for cloud workloads federating an existing IdP identity, which a desktop app has none of), and App Attest. App Attest is genuinely for macOS apps, but its tokens bill **the developer's** workspace — for an open-source tool where each user brings their own account, that would mean the maintainer paying for every user's usage. Pasting an API key stays the only honest option. Revisit only if Anthropic publishes third-party client registration. |
 | Drive Claude Code (`claude -p`) as a provider subprocess | It is an agentic coding tool, not a completions endpoint — wrong latency profile, wrong interface, and its tool-calling does not map onto `capture_screen`. Building on another client's auth is structurally fragile. |
 | One OpenAI-compatible client covering every provider | Anthropic diverges on auth header, system prompt placement, tool schema, image encoding, and required fields. Five differences is a separate implementation, not a quirks flag. |
 
