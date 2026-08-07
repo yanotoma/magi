@@ -19,6 +19,7 @@
     type Theme,
   } from "$lib/ipc";
   import { acceleratorFrom, describeShortcut } from "$lib/shortcut";
+  import Icon from "$lib/Icon.svelte";
 
   type Pane = "general" | "models" | "hotkeys";
 
@@ -568,7 +569,10 @@
       {:else}
       <div class="section-head">
         <h2>Providers</h2>
-        <button type="button" class="primary" onclick={addProvider}>Add a provider</button>
+        <button type="button" class="primary with-icon" onclick={addProvider}>
+          <Icon name="plus" />
+          Add a provider
+        </button>
       </div>
 
       {#if !config || config.providers.length === 0}
@@ -589,21 +593,23 @@
                   aria-expanded={!collapsed.has(provider.id)}
                   onclick={() => toggleCollapsed(provider.id)}
                 >
-                  <span class="twisty" aria-hidden="true">
-                    {collapsed.has(provider.id) ? "▸" : "▾"}
-                  </span>
-                  <span class="ident">
-                    <strong>{provider.id}</strong>
-                    <span class="meta">{provider.base_url}</span>
-                  </span>
+                  <strong class="ident">{provider.id}</strong>
                   <span class="tags">
-                    {#if provider.requires_key}
-                      <span class="badge" class:ok={provider.has_key}>
-                        {provider.key_hint ?? "no key"}
-                      </span>
+                    <!--
+                      The endpoint and the key fingerprint used to sit here and have
+                      moved to the edit form. Neither is actionable from a list, and
+                      a row of URLs and masked secrets is a lot of ink spent on
+                      things nobody reads twice.
+
+                      A missing key is the exception, because it is a problem rather
+                      than a detail: without it the only symptom is every model
+                      reporting Unreachable, which sends the user to check the URL.
+                    -->
+                    {#if provider.requires_key && !provider.has_key}
+                      <span class="badge warn">No API key</span>
                     {/if}
-                    <!-- Shown on the folded card so collapsing does not hide the one
-                         fact that decides what Magi can do. -->
+                    <!-- Shown when folded, so collapsing does not hide the one fact
+                         that decides what Magi can do. -->
                     {#if collapsed.has(provider.id)}
                       <span class="badge">
                         {provider.models.length} model{provider.models.length === 1 ? "" : "s"}
@@ -613,13 +619,37 @@
                 </button>
 
                 <div class="actions">
-                  <button type="button" onclick={() => edit(provider)}>Edit</button>
+                  <!--
+                    The heading is still the fold target — it is the big, obvious
+                    thing to click. This is the indicator, sized and drawn like the
+                    other icons so it reads as a chevron rather than as a dot.
+                  -->
                   <button
                     type="button"
-                    class="danger"
+                    class="icon"
+                    title={collapsed.has(provider.id) ? "Show models" : "Hide models"}
+                    aria-label={collapsed.has(provider.id) ? "Show models" : "Hide models"}
+                    onclick={() => toggleCollapsed(provider.id)}
+                  >
+                    <Icon name={collapsed.has(provider.id) ? "chevron-right" : "chevron-down"} />
+                  </button>
+                  <button
+                    type="button"
+                    class="icon"
+                    title="Edit {provider.id}"
+                    aria-label="Edit {provider.id}"
+                    onclick={() => edit(provider)}
+                  >
+                    <Icon name="pencil" />
+                  </button>
+                  <button
+                    type="button"
+                    class="icon danger"
+                    title="Remove {provider.id}"
+                    aria-label="Remove {provider.id}"
                     onclick={() => run(() => removeProvider(provider.id))}
                   >
-                    Remove
+                    <Icon name="trash" />
                   </button>
                 </div>
               </div>
@@ -1049,28 +1079,17 @@
     background: none;
   }
 
-  .twisty {
-    font-size: 9px;
-    opacity: var(--muted);
-    /* Fixed width so the name does not move by a character when folded. */
-    width: 0.9em;
-  }
-
   .ident {
     min-width: 0;
+    /* Wraps rather than stretching the row: a provider id is user-typed and can be
+       any length. */
+    overflow-wrap: anywhere;
   }
 
   .tags {
     display: flex;
     flex-wrap: wrap;
     gap: 5px;
-  }
-
-  .meta {
-    display: block;
-    font-family: ui-monospace, monospace;
-    font-size: 11px;
-    opacity: var(--muted);
   }
 
   .badge {
@@ -1083,8 +1102,47 @@
     padding: 1px 6px;
   }
 
-  .badge.ok {
-    background: var(--tone-good);
+  /* Square, borderless, and quiet until pointed at. These are secondary actions on
+     a row whose subject is the provider name; giving them button chrome would make
+     two frames per row compete with the name for attention.
+
+     26px square, holding a 14px glyph. The button is the target, not the glyph —
+     sizing the control to the drawing would leave a 14px hit area. */
+  button.icon {
+    align-items: center;
+    background: none;
+    border: none;
+    border-radius: var(--radius-control);
+    display: flex;
+    height: 26px;
+    justify-content: center;
+    opacity: var(--muted-strong);
+    padding: 0;
+    width: 26px;
+  }
+
+  button.icon:hover:not(:disabled) {
+    background: var(--surface-hover);
+    opacity: 1;
+  }
+
+  /* Crimson glyph on the same hover surface as any other icon button. The other
+     danger control on this screen signals with foreground colour, and inventing a
+     second idiom for the same meaning is what made these screens look unrelated in
+     the first place. */
+  button.icon.danger:hover:not(:disabled) {
+    color: crimson;
+  }
+
+  /* An icon beside a word, aligned on the word's centre rather than its baseline. */
+  button.with-icon {
+    align-items: center;
+    display: inline-flex;
+    gap: 6px;
+  }
+
+  .badge.warn {
+    background: var(--tone-warn);
   }
 
   .actions {

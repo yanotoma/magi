@@ -23,6 +23,8 @@ Magi now checks what a model can do before relying on it.
 - The Settings window opens larger, and model names no longer wrap
 - Adding or editing a provider now fills the whole screen instead of sharing it with the provider list
 - Consistent styling across the Settings screens: sections are separated by rules rather than some panes using bordered cards and others nothing
+- The provider list is just names now. The endpoint and the API key fingerprint live in the edit form, where they can be changed; a provider missing a required key still says so
+- Icon buttons for edit, remove and fold, and a `+` on Add a provider
 
 ## [0.2.0-alpha.1] - 2026-08-07
 
