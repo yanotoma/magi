@@ -12,8 +12,16 @@ use futures_util::StreamExt;
 use serde_json::json;
 use tokio::sync::mpsc;
 
-use crate::llm::provider::{LlmError, Provider, Role, StopReason, StreamEvent, TurnRequest};
+use base64::Engine as _;
+
+use crate::llm::provider::{
+    LlmError, ProbeReply, ProbeRequest, Provider, Role, StopReason, StreamEvent, ToolCall,
+    TurnRequest,
+};
 use crate::llm::sse::{SseFrame, SseParser};
+
+const BASE64: base64::engine::general_purpose::GeneralPurpose =
+    base64::engine::general_purpose::STANDARD;
 
 /// Pinned, not tracked. The version header selects a frozen request/response
 /// contract; following the latest would mean the wire format could change under
@@ -153,6 +161,123 @@ pub fn parse_frame(frame: &SseFrame) -> Option<StreamEvent> {
     }
 }
 
+/// Maps a probe onto Anthropic's request body.
+///
+/// Every attachment differs from the OpenAI family's form, which is why this is a
+/// separate function rather than a shared one with a flag:
+///
+/// - the image is a `source` object with the media type in its own field, not a
+///   `data:` URL crammed into `image_url`
+/// - the tool is `input_schema`, not `function.parameters`
+/// - there is no `response_format`, so structured output is requested by handing
+///   the model a tool whose schema *is* the schema and requiring it
+pub fn build_probe(request: &ProbeRequest) -> serde_json::Value {
+    // Content is an array of blocks whenever there is more than text. Anthropic
+    // accepts a bare string too, and the text-only probes use it so that a
+    // reachability check stays as close to a minimal request as possible.
+    let content = match &request.image {
+        Some(image) => json!([
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": image.media_type,
+                    "data": BASE64.encode(&image.bytes),
+                }
+            },
+            { "type": "text", "text": request.prompt }
+        ]),
+        None => json!(request.prompt),
+    };
+
+    let mut body = json!({
+        "model": request.model,
+        "messages": [{ "role": "user", "content": content }],
+        "stream": false,
+        // Required here, unlike the other family.
+        "max_tokens": request.max_tokens,
+    });
+
+    // Top-level, and omitted rather than sent as null. Some proxies in front of
+    // this API reject an explicit null.
+    if let Some(system) = &request.system {
+        body["system"] = json!(system);
+    }
+
+    if let Some(tool) = &request.tool {
+        body["tools"] = json!([{
+            "name": tool.name,
+            "description": tool.description,
+            // `input_schema`, not `parameters`, and not wrapped in a `function`.
+            "input_schema": tool.parameters,
+        }]);
+        body["tool_choice"] = json!({ "type": "auto" });
+    }
+
+    // Anthropic has no `response_format`. A schema is requested by offering a tool
+    // that takes it as input and requiring that tool — so the reply arrives as a
+    // tool call rather than as JSON in the text, which the probe accounts for.
+    if let Some(schema) = &request.json_schema {
+        body["tools"] = json!([{
+            "name": "respond",
+            "description": "Return the answer in the required structure.",
+            "input_schema": schema,
+        }]);
+        body["tool_choice"] = json!({ "type": "tool", "name": "respond" });
+    }
+
+    body
+}
+
+/// Reads a non-streaming message response.
+///
+/// The reply is a list of content blocks, so text and tool calls arrive
+/// interleaved in one array rather than in separate fields as the other family
+/// sends them. Arguments are already a JSON object here — no second parse, unlike
+/// the OpenAI family's stringified `arguments`.
+pub fn parse_probe_reply(url: &str, body: &str) -> Result<ProbeReply, LlmError> {
+    let parsed: serde_json::Value =
+        serde_json::from_str(body).map_err(|e| LlmError::MalformedResponse {
+            url: url.to_string(),
+            reason: e.to_string(),
+        })?;
+
+    let blocks = parsed
+        .get("content")
+        .and_then(|c| c.as_array())
+        .ok_or_else(|| LlmError::MalformedResponse {
+            url: url.to_string(),
+            reason: "no content array in the response".to_string(),
+        })?;
+
+    let mut text = String::new();
+    let mut tool_calls = Vec::new();
+
+    for block in blocks {
+        match block.get("type").and_then(|t| t.as_str()) {
+            Some("text") => {
+                if let Some(chunk) = block.get("text").and_then(|t| t.as_str()) {
+                    text.push_str(chunk);
+                }
+            }
+            Some("tool_use") => {
+                if let Some(name) = block.get("name").and_then(|n| n.as_str()) {
+                    tool_calls.push(ToolCall {
+                        name: name.to_string(),
+                        arguments: block.get("input").cloned().unwrap_or(json!({})),
+                    });
+                }
+            }
+            // Thinking blocks and anything added to the format later. A probe
+            // cares about text and calls; ignoring the rest is what keeps a new
+            // block type from turning into a parse failure.
+            _ => {}
+        }
+    }
+
+    Ok(ProbeReply { text, tool_calls })
+}
+
 /// Turns an HTTP failure into something the user can act on.
 pub fn classify_error(url: &str, model: &str, status: u16, body: &str) -> LlmError {
     let parsed = serde_json::from_str::<serde_json::Value>(body).ok();
@@ -255,6 +380,29 @@ impl Provider for Anthropic {
         }
 
         Ok(())
+    }
+
+    async fn probe(&self, request: ProbeRequest) -> Result<ProbeReply, LlmError> {
+        let url = messages_url(&self.base_url);
+        let mut http = self.client.post(&url).json(&build_probe(&request));
+
+        for (name, value) in auth_headers(self.api_key.as_deref()) {
+            http = http.header(name, value);
+        }
+
+        let response = http.send().await.map_err(|e| LlmError::Unreachable {
+            url: url.clone(),
+            reason: e.to_string(),
+        })?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            return Err(classify_error(&url, &request.model, status.as_u16(), &body));
+        }
+
+        parse_probe_reply(&url, &body)
     }
 }
 
@@ -459,5 +607,199 @@ mod tests {
             messages_url("https://api.anthropic.com/v1/"),
             "https://api.anthropic.com/v1/messages"
         );
+    }
+}
+
+/// Probe mapping and reply reading. Every assertion here has a counterpart in
+/// `openai.rs` asserting the opposite shape — which is the clearest available
+/// evidence that these two really are separate protocols rather than one with a
+/// flag.
+#[cfg(test)]
+mod probe_tests {
+    use super::*;
+    use crate::llm::provider::{Image, ToolSpec};
+
+    fn probe() -> ProbeRequest {
+        ProbeRequest::new("claude-test", "what digit is shown?")
+    }
+
+    fn a_tool() -> ToolSpec {
+        ToolSpec {
+            name: "get_weather".into(),
+            description: "Look up the weather".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": { "city": { "type": "string" } }
+            }),
+        }
+    }
+
+    #[test]
+    fn max_tokens_is_always_present() {
+        // Required by this API. Omitting it is an error, not a default.
+        assert_eq!(build_probe(&probe())["max_tokens"], json!(256));
+    }
+
+    #[test]
+    fn the_system_prompt_is_top_level_and_omitted_when_absent() {
+        let body = build_probe(&probe());
+        assert!(
+            body.get("system").is_none(),
+            "an explicit null is rejected by some proxies in front of this API"
+        );
+
+        let mut with_system = probe();
+        with_system.system = Some("be brief".into());
+        let body = build_probe(&with_system);
+        assert_eq!(body["system"], json!("be brief"));
+        // Never as a message. That is the other family's shape.
+        assert_eq!(body["messages"].as_array().map(Vec::len), Some(1));
+        assert_eq!(body["messages"][0]["role"], json!("user"));
+    }
+
+    #[test]
+    fn an_image_is_a_source_block_not_a_data_url() {
+        let mut request = probe();
+        request.image = Some(Image::png(vec![1, 2, 3]));
+        let body = build_probe(&request);
+
+        let blocks = body["messages"][0]["content"]
+            .as_array()
+            .expect("an array once an image is attached");
+        assert_eq!(blocks[0]["type"], json!("image"));
+        assert_eq!(blocks[0]["source"]["type"], json!("base64"));
+        // The media type lives in its own field here, rather than inside a URL.
+        assert_eq!(blocks[0]["source"]["media_type"], json!("image/png"));
+        assert_eq!(blocks[0]["source"]["data"], json!("AQID"));
+
+        let data = blocks[0]["source"]["data"].as_str().expect("a string");
+        assert!(
+            !data.starts_with("data:"),
+            "the data: prefix belongs to the OpenAI family, not here"
+        );
+    }
+
+    #[test]
+    fn a_text_probe_sends_content_as_a_bare_string() {
+        assert!(build_probe(&probe())["messages"][0]["content"].is_string());
+    }
+
+    #[test]
+    fn a_tool_uses_input_schema_and_no_function_wrapper() {
+        let mut request = probe();
+        request.tool = Some(a_tool());
+        let body = build_probe(&request);
+
+        assert_eq!(body["tools"][0]["name"], json!("get_weather"));
+        assert!(body["tools"][0]["input_schema"].is_object());
+        // Sending `function.parameters` here gets the tool silently ignored rather
+        // than rejected, which would look exactly like a model that cannot call
+        // tools.
+        assert!(body["tools"][0]["function"].is_null());
+        assert!(body["tools"][0]["parameters"].is_null());
+    }
+
+    #[test]
+    fn tool_choice_is_an_object_not_a_string() {
+        let mut request = probe();
+        request.tool = Some(a_tool());
+        assert_eq!(
+            build_probe(&request)["tool_choice"],
+            json!({"type": "auto"})
+        );
+    }
+
+    #[test]
+    fn a_schema_probe_forces_a_tool_because_there_is_no_response_format() {
+        // This API has no `response_format`. Structured output is requested by
+        // handing the model a tool whose input schema *is* the schema, and
+        // requiring it — so the answer arrives as a tool call, not as JSON text.
+        let mut request = probe();
+        request.json_schema = Some(json!({ "type": "object" }));
+        let body = build_probe(&request);
+
+        assert!(body["response_format"].is_null());
+        assert_eq!(body["tools"][0]["name"], json!("respond"));
+        assert_eq!(
+            body["tool_choice"],
+            json!({"type": "tool", "name": "respond"})
+        );
+    }
+
+    #[test]
+    fn text_blocks_are_concatenated() {
+        // A reply is a list of blocks, so text can arrive in pieces even without
+        // streaming. Reading only the first would truncate the answer.
+        let reply = parse_probe_reply(
+            "https://api.anthropic.com/v1/messages",
+            r#"{"content":[{"type":"text","text":"the digit is "},
+                           {"type":"text","text":"seven"}]}"#,
+        )
+        .expect("valid");
+        assert_eq!(reply.text, "the digit is seven");
+    }
+
+    #[test]
+    fn a_tool_use_block_carries_arguments_already_parsed() {
+        // No second parse here, unlike the OpenAI family's stringified `arguments`.
+        let reply = parse_probe_reply(
+            "https://api.anthropic.com/v1/messages",
+            r#"{"content":[{"type":"tool_use","id":"t1","name":"get_weather",
+                            "input":{"city":"Kitchener"}}]}"#,
+        )
+        .expect("valid");
+
+        assert_eq!(reply.tool_calls.len(), 1);
+        assert_eq!(reply.tool_calls[0].name, "get_weather");
+        assert_eq!(reply.tool_calls[0].arguments["city"], json!("Kitchener"));
+    }
+
+    #[test]
+    fn text_and_tool_use_can_arrive_together() {
+        // Models routinely narrate before calling. Both must survive: the text for
+        // the vision probe, the call for the tool probe.
+        let reply = parse_probe_reply(
+            "https://api.anthropic.com/v1/messages",
+            r#"{"content":[{"type":"text","text":"Looking that up."},
+                           {"type":"tool_use","name":"get_weather","input":{}}]}"#,
+        )
+        .expect("valid");
+
+        assert_eq!(reply.text, "Looking that up.");
+        assert_eq!(reply.tool_calls.len(), 1);
+    }
+
+    #[test]
+    fn unknown_block_types_are_ignored_rather_than_fatal() {
+        // Thinking blocks exist today and more will be added. A new block type must
+        // not turn a working probe into a parse failure.
+        let reply = parse_probe_reply(
+            "https://api.anthropic.com/v1/messages",
+            r#"{"content":[{"type":"thinking","thinking":"hmm"},
+                           {"type":"something_new","payload":1},
+                           {"type":"text","text":"seven"}]}"#,
+        )
+        .expect("valid");
+        assert_eq!(reply.text, "seven");
+    }
+
+    #[test]
+    fn prose_about_a_tool_is_not_a_tool_call() {
+        let reply = parse_probe_reply(
+            "https://api.anthropic.com/v1/messages",
+            r#"{"content":[{"type":"text","text":"I would use get_weather here."}]}"#,
+        )
+        .expect("valid");
+        assert!(reply.tool_calls.is_empty());
+    }
+
+    #[test]
+    fn a_reply_with_no_content_array_is_malformed() {
+        let error = parse_probe_reply(
+            "https://api.anthropic.com/v1/messages",
+            r#"{"type":"message","role":"assistant"}"#,
+        )
+        .expect_err("must not read as an empty success");
+        assert!(matches!(error, LlmError::MalformedResponse { .. }));
     }
 }

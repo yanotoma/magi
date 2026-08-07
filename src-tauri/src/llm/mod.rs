@@ -9,6 +9,8 @@ pub mod anthropic;
 pub mod capability;
 pub mod discovery;
 pub mod openai;
+pub mod preflight;
+pub mod probe_image;
 pub mod prompt;
 pub mod provider;
 pub mod registry;

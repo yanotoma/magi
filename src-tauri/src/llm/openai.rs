@@ -12,8 +12,16 @@ use futures_util::StreamExt;
 use serde_json::json;
 use tokio::sync::mpsc;
 
-use crate::llm::provider::{LlmError, Provider, Role, StopReason, StreamEvent, TurnRequest};
+use base64::Engine as _;
+
+use crate::llm::provider::{
+    LlmError, ProbeReply, ProbeRequest, Provider, Role, StopReason, StreamEvent, ToolCall,
+    TurnRequest,
+};
 use crate::llm::sse::{SseFrame, SseParser};
+
+const BASE64: base64::engine::general_purpose::GeneralPurpose =
+    base64::engine::general_purpose::STANDARD;
 
 pub fn chat_url(base_url: &str) -> String {
     format!("{}/chat/completions", base_url.trim_end_matches('/'))
@@ -101,6 +109,139 @@ pub fn parse_frame(frame: &SseFrame) -> Option<StreamEvent> {
         Some(other) => Some(StreamEvent::Done(StopReason::Other(other.to_string()))),
         None => None,
     }
+}
+
+/// Maps a probe onto this family's request body.
+///
+/// Non-streaming, and it attaches whichever one thing is being tested. Kept
+/// separate from [`build_request`] rather than growing that function optional
+/// fields: a turn never sends tools or images in v1, and merging the two would put
+/// four `if let Some` branches in the path that every real answer goes through.
+pub fn build_probe(request: &ProbeRequest) -> serde_json::Value {
+    let mut messages = Vec::with_capacity(2);
+
+    if let Some(system) = &request.system {
+        messages.push(json!({ "role": "system", "content": system }));
+    }
+
+    // With an image, `content` becomes an array of parts. Without one it stays a
+    // bare string — some local servers reject the array form outright, and the
+    // text-only probes must work against those or reachability would fail for a
+    // server that is in fact reachable.
+    let content = match &request.image {
+        Some(image) => json!([
+            { "type": "text", "text": request.prompt },
+            {
+                "type": "image_url",
+                "image_url": {
+                    // This family wants a data URL. Anthropic wants the bare
+                    // payload with the media type in its own field.
+                    "url": format!(
+                        "data:{};base64,{}",
+                        image.media_type,
+                        BASE64.encode(&image.bytes)
+                    )
+                }
+            }
+        ]),
+        None => json!(request.prompt),
+    };
+
+    messages.push(json!({ "role": "user", "content": content }));
+
+    let mut body = json!({
+        "model": request.model,
+        "messages": messages,
+        "stream": false,
+        "max_tokens": request.max_tokens,
+    });
+
+    if let Some(tool) = &request.tool {
+        body["tools"] = json!([{
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.parameters,
+            }
+        }]);
+        // "auto" rather than forcing the call. Forcing it would make every model
+        // that can emit the syntax at all look reliable, and the probe exists to
+        // find out whether the model *chooses* the tool when it needs it.
+        body["tool_choice"] = json!("auto");
+    }
+
+    if let Some(schema) = &request.json_schema {
+        body["response_format"] = json!({
+            "type": "json_schema",
+            "json_schema": {
+                "name": "probe",
+                "strict": true,
+                "schema": schema,
+            }
+        });
+    }
+
+    body
+}
+
+/// Reads a non-streaming completion.
+///
+/// Tool calls are parsed as JSON, never string-matched. That distinction is the
+/// tool probe's entire purpose: a model that writes `I'll call get_weather(...)`
+/// into its prose has failed, and substring matching would score it as a pass.
+pub fn parse_probe_reply(url: &str, body: &str) -> Result<ProbeReply, LlmError> {
+    let parsed: serde_json::Value =
+        serde_json::from_str(body).map_err(|e| LlmError::MalformedResponse {
+            url: url.to_string(),
+            reason: e.to_string(),
+        })?;
+
+    let message = parsed
+        .get("choices")
+        .and_then(|c| c.as_array())
+        .and_then(|c| c.first())
+        .and_then(|c| c.get("message"))
+        .ok_or_else(|| LlmError::MalformedResponse {
+            url: url.to_string(),
+            reason: "no choices[0].message in the response".to_string(),
+        })?;
+
+    let text = message
+        .get("content")
+        .and_then(|c| c.as_str())
+        .unwrap_or_default()
+        .to_string();
+
+    let tool_calls = message
+        .get("tool_calls")
+        .and_then(|c| c.as_array())
+        .map(|calls| {
+            calls
+                .iter()
+                .filter_map(|call| {
+                    let function = call.get("function")?;
+                    let name = function.get("name")?.as_str()?.to_string();
+
+                    // Arguments arrive as a JSON *string*, so they need a second
+                    // parse. A model that emits something unparseable here has
+                    // produced a malformed call, which is a failure rather than a
+                    // call with no arguments — so this yields nothing rather than
+                    // an empty object.
+                    let raw = function.get("arguments").and_then(|a| a.as_str())?;
+                    let arguments = if raw.trim().is_empty() {
+                        serde_json::Value::Object(serde_json::Map::new())
+                    } else {
+                        serde_json::from_str(raw).ok()?
+                    };
+
+                    Some(ToolCall { name, arguments })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(ProbeReply { text, tool_calls })
 }
 
 /// Turns an HTTP failure into something the user can act on.
@@ -204,6 +345,29 @@ impl Provider for OpenAiCompatible {
         }
 
         Ok(())
+    }
+
+    async fn probe(&self, request: ProbeRequest) -> Result<ProbeReply, LlmError> {
+        let url = chat_url(&self.base_url);
+        let mut http = self.client.post(&url).json(&build_probe(&request));
+
+        if let Some(key) = &self.api_key {
+            http = http.bearer_auth(key);
+        }
+
+        let response = http.send().await.map_err(|e| LlmError::Unreachable {
+            url: url.clone(),
+            reason: e.to_string(),
+        })?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            return Err(classify_error(&url, &request.model, status.as_u16(), &body));
+        }
+
+        parse_probe_reply(&url, &body)
     }
 }
 
@@ -413,5 +577,188 @@ mod tests {
             chat_url("http://localhost:11434/v1/"),
             "http://localhost:11434/v1/chat/completions"
         );
+    }
+}
+
+/// Probe mapping and reply reading, kept in their own module because they answer a
+/// different question from the streaming tests above: not "does a turn work" but
+/// "is a capability claim believable".
+#[cfg(test)]
+mod probe_tests {
+    use super::*;
+    use crate::llm::provider::{Image, ToolSpec};
+
+    fn probe() -> ProbeRequest {
+        ProbeRequest::new("gpt-test", "what digit is shown?")
+    }
+
+    fn a_tool() -> ToolSpec {
+        ToolSpec {
+            name: "get_weather".into(),
+            description: "Look up the weather".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": { "city": { "type": "string" } },
+                "required": ["city"]
+            }),
+        }
+    }
+
+    #[test]
+    fn a_text_probe_sends_content_as_a_bare_string() {
+        // Not an array of parts. Several local servers reject the array form, and
+        // the reachability probe has to work against those — otherwise a server
+        // that is in fact reachable would be reported as unreachable.
+        let body = build_probe(&probe());
+        assert!(body["messages"][0]["content"].is_string());
+        assert_eq!(body["stream"], json!(false));
+        assert_eq!(body["max_tokens"], json!(256));
+    }
+
+    #[test]
+    fn an_image_probe_uses_a_data_url() {
+        let mut request = probe();
+        request.image = Some(Image::png(vec![1, 2, 3]));
+        let body = build_probe(&request);
+
+        let parts = body["messages"][0]["content"]
+            .as_array()
+            .expect("content becomes an array once an image is attached");
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0]["type"], json!("text"));
+
+        let url = parts[1]["image_url"]["url"].as_str().expect("a data url");
+        assert!(
+            url.starts_with("data:image/png;base64,"),
+            "this family wants the media type inside the URL, got: {url}"
+        );
+        assert!(url.ends_with("AQID"), "base64 of [1,2,3], got: {url}");
+    }
+
+    #[test]
+    fn a_tool_probe_wraps_the_schema_in_a_function() {
+        let mut request = probe();
+        request.tool = Some(a_tool());
+        let body = build_probe(&request);
+
+        assert_eq!(body["tools"][0]["type"], json!("function"));
+        assert_eq!(body["tools"][0]["function"]["name"], json!("get_weather"));
+        // `parameters`, not `input_schema`. Anthropic uses the other name, and
+        // sending the wrong one gets the tool silently ignored rather than rejected.
+        assert!(body["tools"][0]["function"]["parameters"].is_object());
+        assert!(body["tools"][0]["function"]["input_schema"].is_null());
+    }
+
+    #[test]
+    fn the_tool_probe_does_not_force_the_call() {
+        // Forcing it would make any model that can emit the syntax at all look
+        // reliable. The probe is about whether the model *chooses* the tool.
+        let mut request = probe();
+        request.tool = Some(a_tool());
+        assert_eq!(build_probe(&request)["tool_choice"], json!("auto"));
+    }
+
+    #[test]
+    fn a_schema_probe_uses_response_format() {
+        let mut request = probe();
+        request.json_schema = Some(json!({ "type": "object" }));
+        let body = build_probe(&request);
+
+        assert_eq!(body["response_format"]["type"], json!("json_schema"));
+        assert_eq!(
+            body["response_format"]["json_schema"]["strict"],
+            json!(true)
+        );
+    }
+
+    #[test]
+    fn reads_plain_text_out_of_a_reply() {
+        let reply = parse_probe_reply(
+            "http://x/v1/chat/completions",
+            r#"{"choices":[{"message":{"role":"assistant","content":"seven"}}]}"#,
+        )
+        .expect("valid");
+        assert_eq!(reply.text, "seven");
+        assert!(reply.tool_calls.is_empty());
+    }
+
+    #[test]
+    fn parses_a_tool_call_with_stringified_arguments() {
+        // This family sends `arguments` as a JSON string inside JSON, so it needs a
+        // second parse.
+        let reply = parse_probe_reply(
+            "http://x/v1/chat/completions",
+            r#"{"choices":[{"message":{"content":null,"tool_calls":[
+                 {"id":"c1","type":"function","function":{
+                   "name":"get_weather","arguments":"{\"city\":\"Kitchener\"}"}}]}}]}"#,
+        )
+        .expect("valid");
+
+        assert_eq!(reply.tool_calls.len(), 1);
+        assert_eq!(reply.tool_calls[0].name, "get_weather");
+        assert_eq!(reply.tool_calls[0].arguments["city"], json!("Kitchener"));
+    }
+
+    #[test]
+    fn prose_that_talks_about_calling_a_tool_is_not_a_tool_call() {
+        // The assertion the whole tool probe rests on. Small local models routinely
+        // narrate the call instead of making it, and a substring check for the
+        // tool's name would score this as a pass — handing the model tier 1 and an
+        // agentic loop it cannot drive.
+        let reply = parse_probe_reply(
+            "http://x/v1/chat/completions",
+            r#"{"choices":[{"message":{"content":
+                 "I will call get_weather({\"city\": \"Kitchener\"}) now."}}]}"#,
+        )
+        .expect("valid");
+
+        assert!(reply.text.contains("get_weather"));
+        assert!(
+            reply.tool_calls.is_empty(),
+            "talking about a call is not making one"
+        );
+    }
+
+    #[test]
+    fn a_malformed_arguments_string_is_not_a_valid_call() {
+        // A model that emits unparseable arguments has produced a broken call, not
+        // a call with no arguments. Treating it as the latter would pass a model
+        // whose calls cannot actually be executed.
+        let reply = parse_probe_reply(
+            "http://x/v1/chat/completions",
+            r#"{"choices":[{"message":{"tool_calls":[
+                 {"function":{"name":"get_weather","arguments":"{city: Kitchener"}}]}}]}"#,
+        )
+        .expect("the response itself is valid JSON");
+
+        assert!(
+            reply.tool_calls.is_empty(),
+            "unparseable arguments must not count as a call"
+        );
+    }
+
+    #[test]
+    fn empty_arguments_are_a_valid_call_with_no_input() {
+        // A tool that takes nothing is legitimate, and some models send "" rather
+        // than "{}".
+        let reply = parse_probe_reply(
+            "http://x/v1/chat/completions",
+            r#"{"choices":[{"message":{"tool_calls":[
+                 {"function":{"name":"ping","arguments":""}}]}}]}"#,
+        )
+        .expect("valid");
+
+        assert_eq!(reply.tool_calls.len(), 1);
+        assert_eq!(reply.tool_calls[0].arguments, json!({}));
+    }
+
+    #[test]
+    fn a_reply_with_no_choices_is_malformed_rather_than_empty() {
+        // Reporting this as an empty answer would record "the model said nothing",
+        // which reads as a model that failed the probe. It is Magi failing to
+        // understand the response, and the two need different messages.
+        let error = parse_probe_reply("http://x/v1/chat/completions", r#"{"object":"list"}"#)
+            .expect_err("must not be read as an empty success");
+        assert!(matches!(error, LlmError::MalformedResponse { .. }));
     }
 }
