@@ -93,6 +93,24 @@
   let modelSearch = $state("");
   let selectedOnly = $state(false);
 
+  /** Providers whose model table is folded away.
+   *
+   *  Deliberately not persisted. It is view state, and `config.toml` is a documented
+   *  contract surface — putting "which cards were folded" in there would make a UI
+   *  preference part of the schema Magi promises not to break.
+   *
+   *  Collapsed is opt-in rather than the default: a provider whose models are hidden
+   *  on first sight looks like a provider with no models, and the capability matrix
+   *  is the reason to open this screen. */
+  let collapsed = $state<Set<string>>(new Set());
+
+  const toggleCollapsed = (id: string) => {
+    const next = new Set(collapsed);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    collapsed = next;
+  };
+
   /** The catalogue as the picker shows it: filtered, and in stable order.
    *
    *  Alphabetical rather than selected-first, deliberately. Sorting by selection
@@ -345,6 +363,11 @@
   };
 
   const edit = (provider: ProviderView) => {
+    // Both entry points have to open the form. `addProvider` did and this did not,
+    // so Edit silently did nothing: it set every piece of form state and left the
+    // form hidden. The visibility flag was added later and only one caller was
+    // updated.
+    formOpen = true;
     editing = provider.id;
     discovered = null;
     modelSearch = "";
@@ -557,15 +580,40 @@
           {#each config.providers as provider (provider.id)}
             <li>
               <div class="row">
-                <div>
-                  <strong>{provider.id}</strong>
-                  <span class="meta">{provider.base_url}</span>
-                  {#if provider.requires_key}
-                    <span class="badge" class:ok={provider.has_key}>
-                      {provider.key_hint ?? "no key"}
-                    </span>
-                  {/if}
-                </div>
+                <!--
+                  The whole heading is the disclosure control, not a separate
+                  triangle. A 10px target next to a card the user already reads as
+                  one unit is a worse click than the card itself.
+                -->
+                <button
+                  type="button"
+                  class="disclosure"
+                  aria-expanded={!collapsed.has(provider.id)}
+                  onclick={() => toggleCollapsed(provider.id)}
+                >
+                  <span class="twisty" aria-hidden="true">
+                    {collapsed.has(provider.id) ? "▸" : "▾"}
+                  </span>
+                  <span class="ident">
+                    <strong>{provider.id}</strong>
+                    <span class="meta">{provider.base_url}</span>
+                  </span>
+                  <span class="tags">
+                    {#if provider.requires_key}
+                      <span class="badge" class:ok={provider.has_key}>
+                        {provider.key_hint ?? "no key"}
+                      </span>
+                    {/if}
+                    <!-- Shown on the folded card so collapsing does not hide the one
+                         fact that decides what Magi can do. -->
+                    {#if collapsed.has(provider.id)}
+                      <span class="badge">
+                        {provider.models.length} model{provider.models.length === 1 ? "" : "s"}
+                      </span>
+                    {/if}
+                  </span>
+                </button>
+
                 <div class="actions">
                   <button type="button" onclick={() => edit(provider)}>Edit</button>
                   <button
@@ -578,9 +626,15 @@
                 </div>
               </div>
 
-              {#if provider.models.length === 0}
-                <p class="hint">No models chosen yet — press Edit, fetch them, and pick the ones you want.</p>
+              {#if collapsed.has(provider.id)}
+                <!-- folded -->
+              {:else if provider.models.length === 0}
+                <p class="hint">
+                  No models chosen yet — press Edit, fetch them, and pick the ones you
+                  want.
+                </p>
               {:else}
+                <div class="matrix-scroll">
                 <table class="matrix">
                   <thead>
                     <tr>
@@ -597,13 +651,26 @@
                     {#each provider.models as model (model)}
                       {@const probed = capabilityFor(provider, model)}
                       <tr class:selected={isActive(provider.id, model)}>
-                        <td>
+                        <td class="model-cell">
+                          <!--
+                            Plain text, not a pill. As a filled button the long ids
+                            these endpoints use wrapped inside their own background,
+                            which turned a table of names into a column of two-line
+                            blobs. The active model is marked with a bullet and the
+                            row tint instead, which needs no box.
+                          -->
                           <button
                             type="button"
                             class="model"
                             class:selected={isActive(provider.id, model)}
+                            title={isActive(provider.id, model)
+                              ? "The model Magi is using"
+                              : `Use ${model}`}
                             onclick={() => run(() => setActiveModel(provider.id, model))}
                           >
+                            <span class="bullet" aria-hidden="true">
+                              {isActive(provider.id, model) ? "●" : ""}
+                            </span>
                             {model}
                           </button>
                         </td>
@@ -671,6 +738,7 @@
                     {/each}
                   </tbody>
                 </table>
+                </div>
               {/if}
             </li>
           {/each}
@@ -948,6 +1016,44 @@
     justify-content: space-between;
   }
 
+  /* The whole provider heading is the fold control. It has to look like a heading
+     rather than a button, so everything a button brings is removed and only the
+     cursor and the twisty say it is clickable. */
+  button.disclosure {
+    align-items: baseline;
+    background: none;
+    border: none;
+    color: inherit;
+    display: flex;
+    flex: 1;
+    font: inherit;
+    gap: 7px;
+    min-width: 0;
+    padding: 0;
+    text-align: left;
+  }
+
+  button.disclosure:hover {
+    background: none;
+  }
+
+  .twisty {
+    font-size: 9px;
+    opacity: 0.5;
+    /* Fixed width so the name does not move by a character when folded. */
+    width: 0.9em;
+  }
+
+  .ident {
+    min-width: 0;
+  }
+
+  .tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+
   .meta {
     display: block;
     font-family: ui-monospace, monospace;
@@ -982,19 +1088,54 @@
     margin-top: 10px;
   }
 
+  /* The name as text, with no box of its own. As a filled pill the long ids these
+     endpoints hand out wrapped inside their own background, so a column of names
+     became a column of two-line blobs. */
   .model {
-    border-radius: 20px;
+    background: none;
+    border: none;
+    color: inherit;
     font-family: ui-monospace, monospace;
     font-size: 11px;
-    padding: 3px 11px;
+    padding: 2px 0;
+    text-align: left;
+    /* One line. The cell is as wide as the longest name, and the table scrolls
+       inside its own container when that exceeds the window. */
+    white-space: nowrap;
   }
 
-  /* The selected model is where every turn goes, so it is the most important
-     piece of state on this screen. */
+  .model:hover {
+    background: none;
+    text-decoration: underline;
+  }
+
+  /* The selected model is where every turn goes, so it is the most important piece
+     of state on this screen. Marked by weight, colour and a bullet rather than a
+     filled shape — three signals, none of which needs a box or depends on colour
+     alone. */
   .model.selected {
-    background: AccentColor;
-    border-color: AccentColor;
-    color: AccentColorText;
+    color: AccentColor;
+    font-weight: 600;
+  }
+
+  .bullet {
+    color: AccentColor;
+    display: inline-block;
+    font-size: 9px;
+    /* Reserved whether or not it is filled, so names line up down the column
+       instead of shifting by a bullet's width. */
+    width: 1em;
+  }
+
+  .model-cell {
+    /* The names column takes what it needs; the capability columns are fixed. */
+    width: 100%;
+  }
+
+  /* A provider serving ids like meta-llama/llama-3.3-70b-instruct:free can exceed
+     the window. The table scrolls rather than the page. */
+  .matrix-scroll {
+    overflow-x: auto;
   }
 
   form {
@@ -1127,6 +1268,8 @@
     align-items: center;
     display: flex;
     justify-content: space-between;
+    /* The button sat directly on top of the first provider card. */
+    margin-bottom: 14px;
   }
 
   .section-head h2 {

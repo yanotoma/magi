@@ -17,6 +17,10 @@ Magi now checks what a model can do before relying on it.
 
 ### Changed
 - Untested models are shown as untested rather than as unsupported. Nobody has asked them yet, which is not the same as a refusal
+- Adding a provider is behind a button, so an empty form no longer occupies the Models screen
+- Fetching a provider's models now proposes them instead of selecting them all. Pick the ones you want, with a search box for endpoints that serve hundreds
+- Provider cards fold away, and show their model count when folded
+- The Settings window opens larger, and model names no longer wrap
 
 ## [0.2.0-alpha.1] - 2026-08-07
 
