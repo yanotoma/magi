@@ -113,8 +113,19 @@ pub fn resample(samples: &[f32], from_rate: u32) -> Vec<f32> {
 /// enough that hitting it is a bounded amount of memory.
 pub const MAX_RECORDING_SECONDS: usize = 120;
 
-/// The sample count that corresponds to [`MAX_RECORDING_SECONDS`].
+/// The sample count that corresponds to [`MAX_RECORDING_SECONDS`] at [`TARGET_RATE`].
 pub const MAX_SAMPLES: usize = MAX_RECORDING_SECONDS * TARGET_RATE as usize;
+
+/// The cap in samples for audio at an arbitrary rate.
+///
+/// A microphone records at its own rate — 48 kHz on every Mac — and resampling
+/// happens after the recording ends, not in the audio callback. So the buffer that
+/// fills during capture is at the *device's* rate, and a cap expressed only at
+/// 16 kHz would cut a 48 kHz recording off after forty seconds instead of two
+/// minutes.
+pub fn max_samples_at(rate: u32) -> usize {
+    MAX_RECORDING_SECONDS * rate.max(1) as usize
+}
 
 /// What happened when samples were added to a recording.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,6 +149,23 @@ pub enum Capacity {
 #[derive(Debug)]
 pub struct Recording {
     samples: Vec<f32>,
+
+    /// The rate these samples are at.
+    ///
+    /// Carried rather than assumed, because the buffer that fills during capture is
+    /// at the device's rate and resampling happens after the recording ends. A
+    /// `Recording` that assumed 16 kHz would report a 48 kHz capture as three times
+    /// longer than it is, and cap it three times too early.
+    rate: u32,
+
+    /// Buffers the audio callback could not append because the lock was held.
+    ///
+    /// Counted rather than waited for. The callback runs on an OS realtime thread
+    /// with a deadline, so it uses `try_lock` and gives up rather than blocking —
+    /// blocking there can cascade into a stall across the whole audio system, which
+    /// is worse than losing a few milliseconds. Zero in practice, because the only
+    /// other holder is `stop`, which happens once. Non-zero is worth logging.
+    dropped: usize,
 }
 
 impl Default for Recording {
@@ -147,9 +175,61 @@ impl Default for Recording {
 }
 
 impl Recording {
+    /// A buffer for audio already at [`TARGET_RATE`].
     pub fn new() -> Self {
+        Self::at_rate(TARGET_RATE)
+    }
+
+    /// A buffer for audio at the device's own rate.
+    pub fn at_rate(rate: u32) -> Self {
         Self {
-            samples: Vec::with_capacity(MAX_SAMPLES),
+            samples: Vec::with_capacity(max_samples_at(rate)),
+            rate,
+            dropped: 0,
+        }
+    }
+
+    pub fn rate(&self) -> u32 {
+        self.rate
+    }
+
+    /// How many buffers the realtime callback had to discard.
+    pub fn dropped(&self) -> usize {
+        self.dropped
+    }
+
+    /// Records that a buffer was lost because the lock was busy.
+    pub fn note_dropped(&mut self) {
+        self.dropped = self.dropped.saturating_add(1);
+    }
+
+    /// Appends mono samples from an iterator, allocating nothing.
+    ///
+    /// An iterator rather than a slice, and the reason is where the caller lives.
+    /// The audio callback has interleaved samples in the device's own format —
+    /// `i16`, `i32`, `f32` — and needs them converted and folded to mono. Doing that
+    /// with [`to_mono`] would allocate a `Vec` on a realtime thread, which can block
+    /// past the audio deadline; the symptom is clicks and gaps that read as a
+    /// transcription problem layers from the cause.
+    ///
+    /// So the conversion is expressed as an iterator the caller builds, and it lives
+    /// in `audio::microphone` where cpal's `FromSample` already is. That keeps this
+    /// module free of any dependency on the audio library, which is what lets it be
+    /// tested — and compiled — with nothing installed.
+    pub fn extend_mono(&mut self, frames: impl Iterator<Item = f32>) -> Capacity {
+        let cap = max_samples_at(self.rate);
+
+        for sample in frames {
+            if self.samples.len() >= cap {
+                return Capacity::Full;
+            }
+            self.samples.push(sample);
+        }
+
+        if self.samples.len() >= cap {
+            Capacity::Full
+        } else {
+            Capacity::Accepted
         }
     }
 
@@ -159,7 +239,7 @@ impl Recording {
     /// boundary a property of the buffer rather than of how the device happened to
     /// chunk its callbacks.
     pub fn push(&mut self, samples: &[f32]) -> Capacity {
-        let room = MAX_SAMPLES.saturating_sub(self.samples.len());
+        let room = max_samples_at(self.rate).saturating_sub(self.samples.len());
         if room == 0 {
             return Capacity::Full;
         }
@@ -167,7 +247,7 @@ impl Recording {
         let take = samples.len().min(room);
         self.samples.extend_from_slice(&samples[..take]);
 
-        if self.samples.len() >= MAX_SAMPLES {
+        if self.samples.len() >= max_samples_at(self.rate) {
             Capacity::Full
         } else {
             Capacity::Accepted
@@ -188,12 +268,16 @@ impl Recording {
 
     /// How long the recording is, in seconds.
     pub fn duration_seconds(&self) -> f32 {
-        self.samples.len() as f32 / TARGET_RATE as f32
+        self.samples.len() as f32 / self.rate as f32
     }
 
     /// Takes the samples, leaving the buffer ready to record again.
     pub fn take(&mut self) -> Vec<f32> {
-        std::mem::replace(&mut self.samples, Vec::with_capacity(MAX_SAMPLES))
+        self.dropped = 0;
+        std::mem::replace(
+            &mut self.samples,
+            Vec::with_capacity(max_samples_at(self.rate)),
+        )
     }
 
     pub fn clear(&mut self) {
@@ -484,5 +568,95 @@ mod tests {
         // model is better at than a threshold here.
         let quiet = vec![0.001; TARGET_RATE as usize];
         assert!(worth_transcribing(&quiet));
+    }
+}
+
+#[cfg(test)]
+mod rate_tests {
+    use super::*;
+
+    #[test]
+    fn the_cap_scales_with_the_device_rate() {
+        // A cap expressed only at 16 kHz would cut a 48 kHz recording off after forty
+        // seconds instead of two minutes — the buffer that fills during capture is at
+        // the device's rate, because resampling happens after the recording ends.
+        assert_eq!(max_samples_at(TARGET_RATE), MAX_SAMPLES);
+        assert_eq!(max_samples_at(48_000), MAX_RECORDING_SECONDS * 48_000);
+        // A device reporting zero is nonsense; clamping beats dividing by zero later.
+        assert!(max_samples_at(0) > 0);
+    }
+
+    #[test]
+    fn duration_uses_the_recordings_own_rate() {
+        let mut native = Recording::at_rate(48_000);
+        native.push(&vec![0.0; 48_000]);
+        assert_eq!(native.duration_seconds(), 1.0);
+
+        let mut target = Recording::new();
+        target.push(&vec![0.0; TARGET_RATE as usize]);
+        assert_eq!(target.duration_seconds(), 1.0);
+    }
+
+    #[test]
+    fn a_native_rate_recording_holds_two_full_minutes() {
+        let mut native = Recording::at_rate(48_000);
+        native.push(&vec![0.1; max_samples_at(48_000)]);
+        assert_eq!(native.duration_seconds(), MAX_RECORDING_SECONDS as f32);
+    }
+
+    #[test]
+    fn extend_mono_allocates_nothing_and_respects_the_cap() {
+        let mut recording = Recording::at_rate(TARGET_RATE);
+        assert_eq!(
+            recording.extend_mono([0.1, 0.2, 0.3].into_iter()),
+            Capacity::Accepted
+        );
+        assert_eq!(recording.samples(), &[0.1, 0.2, 0.3]);
+
+        // Filling past the cap stops at exactly the cap rather than growing.
+        let mut full = Recording::at_rate(TARGET_RATE);
+        assert_eq!(
+            full.extend_mono(std::iter::repeat_n(0.5, MAX_SAMPLES + 100)),
+            Capacity::Full
+        );
+        assert_eq!(full.len(), MAX_SAMPLES);
+    }
+
+    #[test]
+    fn extend_mono_can_fold_channels_without_an_intermediate_vec() {
+        // The shape the audio callback uses: convert and average inline, then hand the
+        // iterator over. Asserted here so the pattern is exercised without cpal.
+        let interleaved: Vec<i16> = vec![i16::MAX, i16::MAX, i16::MIN, i16::MIN];
+        let channels = 2usize;
+
+        let mut recording = Recording::at_rate(48_000);
+        recording.extend_mono(interleaved.chunks_exact(channels).map(|frame| {
+            frame
+                .iter()
+                .map(|&s| s as f32 / i16::MAX as f32)
+                .sum::<f32>()
+                / channels as f32
+        }));
+
+        assert_eq!(recording.len(), 2);
+        assert!(recording.samples()[0] > 0.9, "full-scale positive survived");
+        assert!(
+            recording.samples()[1] < -0.9,
+            "full-scale negative survived"
+        );
+    }
+
+    #[test]
+    fn dropped_buffers_are_counted_and_reset_by_take() {
+        // The callback uses try_lock and gives up rather than blocking a realtime
+        // thread. Zero in practice; non-zero is worth logging.
+        let mut recording = Recording::at_rate(48_000);
+        assert_eq!(recording.dropped(), 0);
+        recording.note_dropped();
+        recording.note_dropped();
+        assert_eq!(recording.dropped(), 2);
+
+        recording.take();
+        assert_eq!(recording.dropped(), 0, "a new recording starts clean");
     }
 }

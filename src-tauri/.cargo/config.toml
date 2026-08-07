@@ -1,0 +1,11 @@
+# whisper-rs compiles whisper.cpp, which needs the C++ standard library and — on
+# Apple Silicon — Apple's Accelerate framework for its BLAS routines. Without these
+# the build fails at link time with undefined symbols rather than at compile time,
+# which reads as a broken crate rather than a missing flag.
+#
+# Required by whisper-rs's own BUILDING.md. `cmake` must also be on PATH.
+[target.aarch64-apple-darwin]
+rustflags = ["-lc++", "-l", "framework=Accelerate"]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-lc++", "-l", "framework=Accelerate"]

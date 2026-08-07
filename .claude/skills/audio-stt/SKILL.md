@@ -27,7 +27,17 @@ These are behavioural breaks, which means code written against 0.17 compiles and
 
 **Pin the sample format.** `I32` and `I24` now rank above `I16` in the default selection, so a device that used to give you `I16` may now give you `I32`. Match on `config.sample_format()` and handle each arm; do not assume.
 
-**`BufferSize::Fixed` can be rejected.** It surfaces as `BuildStreamError::StreamConfigNotSupported`. Fall back to `BufferSize::Default` rather than failing.
+**`BufferSize::Fixed` can be rejected.** Fall back to `BufferSize::Default` rather than failing.
+
+**`SampleRate` is a plain `u32`.** It was a tuple struct, so the familiar `SampleRate(48_000)` does not compile. `StreamConfig` and `SupportedStreamConfigRange` are both `Copy`, so nothing needs cloning.
+
+**Every failure is one `cpal::Error` with an [`ErrorKind`].** The separate `BuildStreamError` and `PlayStreamError` types are gone. This is an improvement worth using rather than working around: `ErrorKind::PermissionDenied` is a first-class variant, so a denied microphone does not have to be detected by searching a backend message for the word "permission" — which is a match against prose that can change in any release. `DeviceChanged`, `StreamInvalidated`, `DeviceBusy`, `RealtimeDenied` and `Xrun` are all similarly typed.
+
+**`Xrun` is a dropout, not a disconnection.** It arrives on the error callback while the stream is still alive and the recording still usable. Treating it as a failure would end a capture that was fine.
+
+**`device.name()` is gone**; it is `device.description()?.name()` now, returning a struct that also carries the manufacturer, driver and interface type.
+
+**`Stream` is `Send + Sync` on every platform**, as of 0.17. The widely repeated advice — that it is `!Send` and must live on a dedicated thread behind a command channel — is obsolete, and following it costs about fifty lines of threading for a problem that no longer exists.
 
 ## The audio callback is a realtime thread
 

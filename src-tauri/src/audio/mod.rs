@@ -11,6 +11,8 @@
 //! is a genuine test input rather than a separate code path.
 
 pub mod format;
+pub mod microphone;
 pub mod source;
 
+pub use microphone::Microphone;
 pub use source::{AudioError, AudioSource, Captured, Ending, FakeSource};
