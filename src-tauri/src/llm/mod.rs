@@ -6,8 +6,10 @@
 //! `.claude/skills/llm-providers/SKILL.md`.
 
 pub mod anthropic;
+pub mod capability;
 pub mod discovery;
 pub mod openai;
+pub mod prompt;
 pub mod provider;
 pub mod registry;
 pub mod sse;
