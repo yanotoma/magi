@@ -73,7 +73,49 @@ fn tauri_conf_delegates_to_package_json() {
     );
 }
 
+/// The newest released version recorded in the changelog.
+///
+/// Headings are `## [0.2.0-alpha.1] - 2026-08-07`. `## [Unreleased]` sits above
+/// them and is skipped: it is where entries accumulate before a release, so it
+/// never names a version.
+fn changelog_latest_release() -> String {
+    let raw = fs::read_to_string(repo_root().join("CHANGELOG.md"))
+        .expect("CHANGELOG.md must exist at the repo root");
+
+    for line in raw.lines() {
+        let Some(rest) = line.strip_prefix("## [") else {
+            continue;
+        };
+        let Some((version, _)) = rest.split_once(']') else {
+            continue;
+        };
+        if version == "Unreleased" {
+            continue;
+        }
+        return version.to_string();
+    }
+
+    panic!("CHANGELOG.md has no released version heading");
+}
+
+/// A version bump and its changelog entry must land together.
+///
+/// This replaced an assertion that the version equalled a hardcoded literal. That
+/// literal was a fourth place the version lived, which is the duplication
+/// `docs/VERSIONING.md` exists to prevent, and it had to be edited on every
+/// release — so it only ever failed for the intended bump it was supposed to be
+/// guarding.
+///
+/// Comparing against the changelog instead adds no new copy: it cross-checks two
+/// records that already have to agree, and it enforces the project's own rule that
+/// every user-visible change is written down in the release that carries it. A
+/// bump with no entry fails here, and so does an entry with no bump.
 #[test]
-fn version_is_the_expected_release() {
-    assert_eq!(package_json_version(), "0.1.0-alpha.1");
+fn the_released_version_has_a_changelog_entry() {
+    assert_eq!(
+        package_json_version(),
+        changelog_latest_release(),
+        "package.json and the newest CHANGELOG.md heading disagree. Bumping the \
+         version means adding its changelog section in the same commit."
+    );
 }

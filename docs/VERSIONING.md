@@ -2,7 +2,7 @@
 
 Magi follows [Semantic Versioning 2.0.0](https://semver.org).
 
-**Current version:** `0.1.0-alpha.1` (unreleased — no build exists yet)
+**Current version:** `0.2.0-alpha.1` (tagged; no downloadable build until M7 adds signing)
 
 ---
 
@@ -54,7 +54,8 @@ Each milestone from [`TASKS.md`](TASKS.md) maps to a version. This is the plan, 
 | Version | Milestone | What works |
 |---|---|---|
 | `0.1.0-alpha.1` | M1 — Shell | Tray, global hotkey, panel and settings windows. No intelligence. |
-| `0.2.0-alpha.1` | M2 + M3 — Providers & pre-flight | Configure a model, see its capability tier. Still no input pipeline. |
+| `0.2.0-alpha.1` | M2 — Config & providers | Configure a model, type a question, watch the answer stream back. |
+| `0.2.0-alpha.2` | M3 — Pre-flight & capability tiers | See what the chosen model can actually do before relying on it. |
 | `0.3.0-alpha.1` | M4 — Audio & STT | Speak, get a local transcript. First genuinely useful build. |
 | `0.4.0-alpha.1` | M5 — Capture & agentic vision | The model can decide to look at your screen. |
 | `0.5.0-beta.1` | M6 — Session & panel | v1 feature-complete. Config schema frozen. |
@@ -62,6 +63,8 @@ Each milestone from [`TASKS.md`](TASKS.md) maps to a version. This is the plan, 
 | `1.0.0` | — | After beta feedback settles. Config schema committed to. |
 | `1.1.0` | M8 — Ambient | Wake word and TTS. |
 | `1.2.0` | M9 — Agency | Computer use. |
+
+`0.2.0` was originally planned as one release covering M2 and M3 together. It was split once M2 was working: a build that answers questions is worth putting a tag on rather than holding back until pre-flight lands, and accumulating alpha increments toward one minor is exactly what the pre-release identifiers are for.
 
 `1.0.0` is not a quality claim. It is a promise that `config.toml` will not break under you without a major bump.
 

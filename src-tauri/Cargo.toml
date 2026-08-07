@@ -1,6 +1,6 @@
 [package]
 name = "magi"
-version = "0.1.0-alpha.1"
+version = "0.2.0-alpha.1"
 description = "A background AI agent for your desktop"
 authors = ["The Magi contributors"]
 license = "Apache-2.0"
@@ -31,11 +31,24 @@ tauri = { version = "2", features = [
 ] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-window-state = "2"
+async-trait = "0.1"
+# StreamExt, for iterating reqwest's byte stream.
+futures-util = { version = "0.3", default-features = false }
+# rustls rather than the system TLS stack: one fewer thing that differs
+# between a developer machine, a CI runner, and a user's Mac.
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+tokio = { version = "1", features = ["sync", "macros", "rt"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# API keys live in the OS keychain, never in config.toml.
+keyring = { version = "3", features = ["apple-native"] }
 thiserror = "2"
+toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
-toml = "0.8"
+# #[tokio::test] needs a runtime the library itself does not pull in.
+tokio = { version = "1", features = ["macros", "rt"] }
+# Config tests write to a throwaway directory rather than the real config dir.
+tempfile = "3"

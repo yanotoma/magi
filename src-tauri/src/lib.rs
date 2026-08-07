@@ -4,12 +4,21 @@
 //! together here, so there is one place to read to understand what happens at
 //! startup.
 
+pub mod commands;
+pub mod config;
 pub mod error;
 pub mod hotkey;
+pub mod llm;
 pub mod tray;
 pub mod windows;
 
-use tauri::WindowEvent;
+use std::sync::Mutex;
+
+use tauri::{Manager, WindowEvent};
+
+use crate::commands::AppState;
+use crate::config::secrets::KeyringStore;
+use crate::config::Config;
 
 /// Builds and runs the Tauri application.
 ///
@@ -39,17 +48,66 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
+            let config_dir = app.path().app_config_dir()?;
+
+            // A config that fails to parse must not stop the app from starting.
+            // The user would have no window in which to be told why, and no way
+            // to reach Settings to fix it. Fall back to defaults, say so loudly
+            // in the log, and leave the broken file untouched so it can be
+            // repaired rather than silently overwritten.
+            let config = Config::load(&config_dir).unwrap_or_else(|error| {
+                tracing::error!(
+                    %error,
+                    path = %Config::path_in(&config_dir).display(),
+                    "config could not be loaded; starting with defaults and leaving the file alone"
+                );
+                Config::default()
+            });
+
+            let theme = config.appearance.theme;
+            let shortcut = config.hotkey.toggle.clone();
+
+            app.manage(AppState {
+                http: reqwest::Client::new(),
+                config: Mutex::new(config),
+                config_dir,
+                secrets: std::sync::Arc::new(KeyringStore),
+                key_hints: Mutex::new(std::collections::HashMap::new()),
+                in_flight: Mutex::new(None),
+            });
+
+            commands::apply_theme(app.handle(), theme);
+
             tray::init(app)?;
 
+            // The configured shortcut, not the default one. Registering the
+            // default here would ignore the field the user just set in Settings,
+            // so their hotkey would work until they quit and then revert on every
+            // launch — a bug that looks like the setting not saving at all.
+            //
             // A shortcut conflict must not prevent startup. The tray icon is
             // still a working way in, and killing launch over a hotkey clash
             // would leave the user with no entry point at all.
-            if let Err(error) = hotkey::register_default(app.handle()) {
-                tracing::warn!(%error, "continuing without a global shortcut");
+            if let Err(error) = hotkey::register(app.handle(), &shortcut) {
+                tracing::warn!(%error, shortcut, "continuing without a global shortcut");
             }
 
             Ok(())
         })
+        .invoke_handler(tauri::generate_handler![
+            commands::get_config,
+            commands::get_appearance,
+            commands::save_provider,
+            commands::remove_provider,
+            commands::set_active_model,
+            commands::discover_models,
+            commands::set_theme,
+            commands::set_show_thinking,
+            commands::set_prompt_context,
+            commands::set_hotkey,
+            commands::send_text_turn,
+            commands::cancel_turn,
+        ])
         .on_window_event(|window, event| {
             // Closing a window must never quit a tray app. Hide instead, and let
             // the tray's Quit item be the only way out.

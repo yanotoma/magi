@@ -1,6 +1,6 @@
 {
   "name": "magi",
-  "version": "0.1.0-alpha.1",
+  "version": "0.2.0-alpha.1",
   "description": "A background AI agent for your desktop",
   "license": "Apache-2.0",
   "repository": {
@@ -17,7 +17,8 @@
     "tauri": "tauri"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2"
+    "@tauri-apps/api": "^2",
+    "markdown-it": "^15.0.0"
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.6",

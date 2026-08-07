@@ -1,4 +1,20 @@
 /*
+  Declaring both schemes is what makes system colours, form controls,
+  scrollbars and select popups follow the window's theme.
+
+  Without it a page defaults to `light`, and CSS system colours resolve to their
+  light values however the OS is set — so `background: Canvas` renders white on a
+  Mac in dark mode. That is consistent behaviour, just not the intended one, and
+  it is invisible until someone with dark mode on opens the window.
+
+  This is the other half of the theme: Rust sets the window's theme via
+  `set_theme`, and this line is what makes the content obey it.
+*/
+:root {
+  color-scheme: light dark;
+}
+
+/*
   The panel window is transparent at the OS level. If html or body paint a
   background, that transparency is invisible — the page simply covers it. Each
   route draws its own surface instead.

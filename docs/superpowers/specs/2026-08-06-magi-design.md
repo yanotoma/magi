@@ -208,27 +208,53 @@ Whisper inference and screen capture are CPU-bound and always run on `spawn_bloc
 Config is human-editable TOML in the OS config directory (`~/Library/Application Support/dev.magi.app/config.toml` on macOS).
 
 ```toml
+schema_version = 1
+
 [hotkey]
 toggle = "Alt+Space"
+
+[prompt]
+# Appended to Magi's own system prompt, never replacing it. Magi's instructions
+# carry the contract that makes agentic capture fire, so a value that could
+# overwrite them would disable tier 1 with no way for the user to connect the
+# symptom to this field.
+context = "I work in Kitchener, Ontario, mostly in Rust."
+
+[appearance]
+theme = "system"        # system | light | dark
+show_thinking = false
 
 [capture]
 target = "active-display"   # active-display | active-window | display:N
 redact_on_capture = false   # v2
 
+[active]
+provider = "local"
+model = "qwen2.5-vl:7b"
+
 [[provider]]
 id = "local"
 kind = "openai-compatible"
 base_url = "http://localhost:11434/v1"
-model = "qwen2.5-vl:7b"
+# A list, not one name: an endpoint routinely serves many. Discovered from
+# GET /v1/models rather than typed by hand.
+models = ["qwen2.5-vl:7b", "llama3.2"]
+requires_key = false
 # tier is derived by preflight, never written by hand
 
 [[provider]]
 id = "claude"
-kind = "openai-compatible"
+# NOT openai-compatible. Anthropic's API differs in auth header, system prompt
+# placement, tool schema, image encoding, and required fields — it is a separate
+# wire protocol, and `kind` is what selects the implementation.
+kind = "anthropic"
 base_url = "https://api.anthropic.com/v1"
-model = "claude-opus-5"
+models = ["claude-opus-5"]
+requires_key = true
 # api key lives in the OS keychain under service "dev.magi.app", account "claude"
 ```
+
+Adding a section with a default is additive, so it does not bump `schema_version` — see [VERSIONING.md](../../VERSIONING.md) for what does.
 
 **API keys never touch the config file.** They live in the OS keychain via the `keyring` crate. A config file that is safe to paste into a GitHub issue removes an entire class of accidental credential leaks — a real risk for an open-source project whose users will be pasting configs into bug reports.
 

@@ -40,6 +40,23 @@ x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility
 
 **Degrade with a visible explanation, never silently.** A missing permission produces a panel banner naming the permission and what stopped working. Silent degradation in a tray app is indistinguishable from a crash.
 
+## The keychain is a fourth permission, and it behaves differently
+
+TCC is not the only thing that prompts. The keychain has its own access-control model, and it caught this project out once already.
+
+**Never call the keychain from the main thread.** `keyring`'s `get_password` looks like a cheap getter and is a synchronous Mach round trip to `securityd`. When the ACL does not already permit this exact binary, `securityd` blocks until the user answers an access dialog — and the main thread is the only thread that can present and service that dialog. So the main thread ends up waiting for an answer to a prompt only it could have drawn. That is a permanent deadlock, not a pause.
+
+It is worse in Magi than in a normal app, for a reason specific to this design: `ActivationPolicy::Accessory` means there is no Dock icon, so the user cannot even bring the stuck prompt to the front. The whole symptom is a spinning cursor over a dead tray icon and a hotkey that does nothing. No panic, no log line, no error.
+
+Two rules follow:
+
+- A **synchronous `#[tauri::command] fn` runs on the main thread.** Any command that can reach the keychain must be `async` and route the call through `commands::with_secrets`, which puts it on a blocking task.
+- **Never read the keychain in a startup path.** Windows created hidden at launch — Magi's panel — issue their first IPC before anything is on screen. A keychain read there means asking for access with no window to attach the prompt to. Give such callers a command that touches no secrets (`get_appearance`), rather than the whole config.
+
+**"Always Allow" does not stick across a rebuild.** The ACL is keyed to the binary's code signature, and `cargo build` produces a new binary every time, so a development build is a different application to macOS on each compile. Repeated prompts in `tauri dev` are expected and are not a bug to chase. A signed, notarised release build has one stable signature, so the user is asked once per install.
+
+Because of that, **keep the number of reads low rather than relying on the ACL**: cache the derived value (Magi caches the key *fingerprint*, never the secret) and read lazily, only when a screen actually needs it.
+
 ## Info.plist usage descriptions
 
 Required, and they are user-visible in the prompt. Write them for the user, not for the linter:

@@ -2,10 +2,10 @@
 
 Complete breakdown of what is done and what is pending, across every milestone.
 
-**Last updated:** 2026-08-06
-**Current phase:** M1 shipped as `0.1.0-alpha.1`; M2 next
-**Current version:** `0.1.0-alpha.1` (unreleased — see [VERSIONING.md](VERSIONING.md))
-**Overall:** 30 / 134 tasks done (22%)
+**Last updated:** 2026-08-07
+**Current phase:** M3 — pre-flight and capability tiers, targeting `0.2.0-alpha.2`
+**Current version:** `0.2.0-alpha.1` (released — see [VERSIONING.md](VERSIONING.md))
+**Overall:** 57 / 143 tasks done (40%)
 
 Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 
@@ -17,13 +17,13 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 |---|---|---|---:|---:|---|
 | **M0** | Foundations | — | 15 | 15 | ✅ Complete |
 | **M1** | Shell — tray, hotkey, windows | `0.1.0-alpha.1` | 15 | 16 | ✅ Shipped |
-| **M2** | Config & providers | `0.2.0-alpha.1` | 0 | 18 | ⬜ |
-| **M3** | Pre-flight & capability tiers | `0.2.0-alpha.1` | 0 | 14 | ⬜ |
+| **M2** | Config & providers | `0.2.0-alpha.1` | 27 | 27 | ✅ Shipped |
+| **M3** | Pre-flight & capability tiers | `0.2.0-alpha.2` | 0 | 14 | 🔨 Next |
 | **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 0 | 14 | ⬜ |
 | **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 0 | 13 | ⬜ |
 | **M6** | Session machine & panel UX | `0.5.0-beta.1` | 0 | 16 | ⬜ |
 | **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 14 | ⬜ |
-| — | **v1 total** | `1.0.0` | **30** | **120** | |
+| — | **v1 total** | `1.0.0` | **57** | **129** | |
 | **M8** | v2 — wake word & TTS | `1.1.0` | 0 | 9 | 🔮 Post-v1 |
 | **M9** | v3 — computer use | `1.2.0` | 0 | 5 | 🔮 Post-v1 |
 
@@ -63,7 +63,7 @@ One task is carried into M3/M4/M6 rather than done here — see the note on the 
 - [x] Configure `.gitignore` for Rust, Node, SvelteKit, and Tauri build artifacts
 - [x] Set up `cargo fmt` and `cargo clippy -- -D warnings` in CI
 - [x] Set the version to `0.1.0-alpha.1` in `package.json`, with `tauri.conf.json > version` pointing at `"../package.json"` so there is one source of truth
-- [x] CI check asserting `Cargo.toml` and `package.json` versions agree
+- [x] CI check asserting `Cargo.toml` and `package.json` versions agree (`src-tauri/tests/version_sync.rs`, run by `cargo test`). Also asserts `tauri.conf.json` still delegates its version, and that the released version has a matching `CHANGELOG.md` heading — so a bump cannot land without its changelog entry, nor an entry without a bump
 
 **Tray**
 - [x] `tray.rs` — tray icon with menu (Open, Settings, Quit) using `TrayIconBuilder`
@@ -83,26 +83,46 @@ One task is carried into M3/M4/M6 rather than done here — see the note on the 
 
 ---
 
-## M2 — Config & providers
+## M2 — Config & providers ✅
 
-- [ ] `config.rs` — TOML schema with `serde`, loaded from the OS config dir
-- [ ] Config validation with actionable error messages, not just parse failures
-- [ ] Config versioning and a migration path (needed before the first public release, not after)
-- [ ] Write defaults on first run
-- [ ] Store and retrieve API keys via `keyring`, never in the TOML
-- [ ] Optional OAuth sign-in for Anthropic as an alternative to a pasted key (`Authorization: Bearer` + `anthropic-beta: oauth-2025-04-20`, short-lived tokens, refresh handling). Still billed as API usage — it removes key-pasting friction, not cost
-- [ ] Provider registry — id, kind, base URL, model, resolved tier
-- [ ] Built-in presets for Ollama, LM Studio, OpenAI, Anthropic, OpenRouter
-- [ ] Custom OpenAI-compatible endpoint as a first-class option (base URL + model + optional key) — a missing preset must never be a wall. Any endpoint speaking the OpenAI chat-completions shape works; pre-flight reports what it can actually do
-- [ ] `llm::provider` — the `Provider` trait; internal turn types are provider-neutral
-- [ ] `llm::openai` — OpenAI-compatible impl (Ollama, LM Studio, OpenAI, OpenRouter)
-- [ ] `llm::anthropic` — Anthropic native impl (x-api-key, top-level system, input_schema, base64 image source)
-- [ ] Server-sent-event streaming with incremental token emission
-- [ ] Defensive SSE parsing — local backends split frames and omit terminators
-- [ ] `FakeProvider` for tests, replaying scripted turns including tool calls
-- [ ] Settings UI — provider list with add / edit / remove
-- [ ] Settings UI — hotkey capture control
-- [ ] `[prompt] context` in `config.toml` — free text appended to Magi's system prompt. **Additive, never a replacement**: Magi's own instructions carry the contract that makes agentic capture fire, and letting a user overwrite them breaks tier 1 silently
+Ends with a working text loop: type in the panel, watch the answer stream back. No voice, no capture, no state machine.
+
+The milestone was widened from pure infrastructure for one reason: with the original plan nothing worked until M6, and streaming into the UI is where the surprises live — split SSE frames, backpressure, cancellation. Finding those against a local model in M2 costs hours; finding them in M6 under four other subsystems costs days of working out which one is at fault.
+
+Manually verified on macOS against Xiaomi MiMo: a provider configured from Settings, models discovered from the endpoint, answers streaming into the panel and rendering as markdown, cancellation via `Escape` and Stop, the global shortcut rebound and surviving a restart, and `[prompt] context` still in effect after Clear and after quitting.
+
+Three bugs the milestone only surfaced when run, all worth keeping in mind:
+- Cancelling aborted the task, and an aborted task cannot emit its own completion — so the panel waited forever for a message from something that no longer existed. The side that initiates a cancellation already knows the turn is over and must resolve its own state.
+- The keychain was read from a synchronous command, which Tauri runs on the main thread. It deadlocked at launch against an access dialog only the main thread could have drawn. See the hard rule in `CLAUDE.md` and the keychain section of the `macos-permissions` skill.
+- A settings field that saved only on `blur` never saved at all, because this window hides rather than closes and a focused field is not reliably blurred when its window disappears.
+
+- [x] `config.rs` — TOML schema with `serde`, loaded from the OS config dir
+- [x] Config validation with actionable error messages, not just parse failures
+- [x] Config versioning and a migration path (needed before the first public release, not after)
+- [x] Write defaults on first run
+- [x] Store and retrieve API keys via `keyring`, never in the TOML
+- [x] Provider registry — resolves a config to an implementation by protocol. Keyed by `kind`, not by vendor: Xiaomi serves both protocols on one host, so a vendor-keyed registry would have to pick one
+- [x] Model discovery via `GET /v1/models`, so adding a provider does not mean typing model names by hand
+- [x] Model picker in Settings — clicking a model chip activates it. A picker inside the panel waits for M6, when there is a reason to switch mid-conversation
+- [x] Built-in presets for Ollama, LM Studio, OpenAI, Anthropic, OpenRouter, Xiaomi MiMo
+- [x] Custom OpenAI-compatible endpoint as a first-class option (base URL + models + optional key) — a missing preset must never be a wall. Any endpoint speaking the OpenAI chat-completions shape works; pre-flight reports what it can actually do
+- [x] `llm::provider` — the `Provider` trait; internal turn types are provider-neutral
+- [x] `llm::openai` — OpenAI-compatible impl (Ollama, LM Studio, OpenAI, OpenRouter, MiMo)
+- [x] `llm::anthropic` — Anthropic native impl (x-api-key + anthropic-version, top-level system, named SSE events)
+- [x] Server-sent-event streaming with incremental token emission
+- [x] Defensive SSE parsing — local backends split frames and omit terminators
+- [x] `FakeProvider` for tests, replaying scripted turns (tool calls join it in M5)
+- [x] SSE parsing as a pure function, every body replayed at hostile chunk sizes (one byte at a time as well as whole) so the split-frame path is exercised rather than assumed
+- [x] Tauri commands `send_text_turn`, `cancel_turn`, config commands; events `magi://token`, `magi://turn-done`, `magi://error`
+- [x] Cancellation — dismissing the panel, pressing Stop, or asking again aborts the in-flight task, which drops the receiver and stops the provider
+- [x] Panel: text input and streaming answer, growing to a max height then scrolling
+- [x] Inline errors naming the provider and the resolved URL — "connection refused" is useless without knowing what it tried to reach
+- [x] Settings UI — provider list with add / edit / remove
+- [x] Render answers as markdown — bold, lists, tables, code. Models emit markdown whether or not it is asked for, so plain text does not mean "no formatting", it means showing `**weather.com**` with the asterisks. Rendered with raw HTML disabled at the parser rather than sanitised afterwards, images disabled (a model-chosen image URL is a read-receipt beacon), and links rendered as non-navigable text next to their real destination — this panel is the app's own webview, so following a link would replace Magi's UI with no way back
+- [x] Settings UI — hotkey capture control. Records from `event.code`, not `event.key`: `key` reports what the layout *produces*, so Alt+A is "å" on macOS and a stored binding would depend on the layout at the moment it was recorded. Validation runs before the old shortcut is released and the old one is restored if the OS refuses the new one, so a failed attempt never leaves a background app with no way in
+- [x] `[prompt] context` in `config.toml` — free text appended to Magi's system prompt. **Additive, never a replacement**: Magi's own instructions carry the contract that makes agentic capture fire, and letting a user overwrite them breaks tier 1 silently. Enforced by a single `system_prompt()` with no branch that omits Magi's half, and a test asserting no input — hostile ones included — can produce a prompt not led by it
+- [x] Register the shortcut the config actually names at startup, not the default. Registering the default meant a hotkey set in Settings worked until quit and then reverted, which reads as the setting failing to save
+- [x] Validate `[hotkey] toggle` on load, not only when Settings writes it. The file is meant to be hand-edited, and a hand-written `toggle = "Space"` would be registered as typed — swallowing the spacebar in every application on the machine
 
 ---
 
@@ -258,7 +278,8 @@ Recorded so they are not re-proposed.
 
 | Idea | Why not |
 |---|---|
-| Use a Claude Pro/Max subscription instead of an API key | The subscription covers claude.ai and Claude Code, not third-party API clients. Reusing their stored credentials means reverse-engineering a private auth flow, violates the terms, and breaks without warning. |
+| Use a Claude Pro/Max subscription instead of an API key | The subscription covers claude.ai and Claude Code, not third-party API clients. Reusing their stored credentials means reverse-engineering a private auth flow, violates the terms, and breaks without warning. **Confirmed since:** Anthropic began blocking third-party Max OAuth on 2026-01-09 and its legal-compliance page now states plainly that consumer OAuth tokens in any other product "constitutes a violation of the Consumer Terms of Service". opencode removed the feature in February 2026 citing legal requests. Declining this in M0 turned out to be the only path that did not need undoing. |
+| OAuth sign-in for Anthropic as an alternative to a pasted key | Was an M2 task; removed as **not implementable**, not merely unwise. Anthropic runs no OAuth program for third-party applications and offers no way to register a client id, so the only route is to reuse Claude Code's hard-coded one — which is the rejected approach above wearing a different name. The three supported methods are API keys, Workload Identity Federation (for cloud workloads federating an existing IdP identity, which a desktop app has none of), and App Attest. App Attest is genuinely for macOS apps, but its tokens bill **the developer's** workspace — for an open-source tool where each user brings their own account, that would mean the maintainer paying for every user's usage. Pasting an API key stays the only honest option. Revisit only if Anthropic publishes third-party client registration. |
 | Drive Claude Code (`claude -p`) as a provider subprocess | It is an agentic coding tool, not a completions endpoint — wrong latency profile, wrong interface, and its tool-calling does not map onto `capture_screen`. Building on another client's auth is structurally fragile. |
 | One OpenAI-compatible client covering every provider | Anthropic diverges on auth header, system prompt placement, tool schema, image encoding, and required fields. Five differences is a separate implementation, not a quirks flag. |
 
@@ -268,6 +289,7 @@ Recorded so they are not re-proposed.
 - [ ] Consider extracting a `magi-core` crate with no Tauri dependency. Magi's interesting logic — config parsing and migration, tier assignment, prompt assembly, deictic detection, token-stream parsing — touches no platform API, but it currently lives in a crate that depends on `tauri`, so testing it drags in a whole platform. A core crate would let those tests run anywhere in seconds and would make the cross-platform claim structural rather than aspirational. Not worth it at M1's 300 lines of logic; revisit when `llm/`, `config/`, and `session/` land in M2
 - [x] Split CI by what actually needs macOS. Everything currently runs on `macos-14`, but `cargo fmt`, `svelte-check`, and the task-count check are platform-independent — and macOS runners bill at a 10x minute multiplier and are markedly harder to get allocated (observed: two consecutive runs lost, one to a service outage and one to "job was not acquired by Runner of type hosted"). Move the platform-independent checks to `ubuntu-latest` and leave macOS for the build. Caveat: `cargo test` on Linux needs Tauri's webkit2gtk system dependencies, which is real work rather than a config line — but it would also prove the cross-platform claim is not vapour
 - [ ] Keep all tests free of GPU, microphone, display, and network dependencies
+- [ ] Set a Content-Security-Policy. `app.security.csp` is currently `null`, so Tauri injects none. The panel renders model output as HTML, and while the markdown renderer is configured so it cannot emit tags, that is one layer: a CSP is what makes an escape from that layer inert instead of exploitable. Needs care rather than a one-line change — Svelte's scoped styles and markdown-it's table alignment both use inline `style`, so `style-src` has to allow them, and the dev server's HMR needs its own origin allowed
 - [ ] Windows packaging
 - [ ] Linux packaging
 - [ ] Issue and PR templates
