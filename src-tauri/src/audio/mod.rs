@@ -11,3 +11,6 @@
 //! is a genuine test input rather than a separate code path.
 
 pub mod format;
+pub mod source;
+
+pub use source::{AudioError, AudioSource, Captured, Ending, FakeSource};

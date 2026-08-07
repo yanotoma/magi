@@ -5,7 +5,7 @@ Complete breakdown of what is done and what is pending, across every milestone.
 **Last updated:** 2026-08-07
 **Current phase:** M4 — audio and speech-to-text, targeting `0.3.0-alpha.1`
 **Current version:** `0.2.0-alpha.2` (released — see [VERSIONING.md](VERSIONING.md))
-**Overall:** 71 / 144 tasks done (49%)
+**Overall:** 75 / 144 tasks done (52%)
 
 Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 
@@ -19,11 +19,11 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 | **M1** | Shell — tray, hotkey, windows | `0.1.0-alpha.1` | 15 | 16 | ✅ Shipped |
 | **M2** | Config & providers | `0.2.0-alpha.1` | 28 | 28 | ✅ Shipped |
 | **M3** | Pre-flight & capability tiers | `0.2.0-alpha.2` | 13 | 14 | ✅ Shipped |
-| **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 0 | 14 | 🔨 Next |
+| **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 4 | 14 | 🔨 Next |
 | **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 0 | 13 | ⬜ |
 | **M6** | Session machine & panel UX | `0.5.0-beta.1` | 0 | 16 | ⬜ |
 | **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 14 | ⬜ |
-| — | **v1 total** | `1.0.0` | **71** | **130** | |
+| — | **v1 total** | `1.0.0` | **75** | **130** | |
 | **M8** | v2 — wake word & TTS | `1.1.0` | 0 | 9 | 🔮 Post-v1 |
 | **M9** | v3 — computer use | `1.2.0` | 0 | 5 | 🔮 Post-v1 |
 
@@ -159,9 +159,9 @@ Two bugs the milestone only surfaced when run, both worth remembering:
 **Capture**
 - [ ] `audio` module — enumerate input devices via `cpal`
 - [ ] Open the default input and buffer PCM while recording
-- [ ] Resample to 16 kHz mono (Whisper's required input format)
-- [ ] Cap recording length and handle the buffer-full case
-- [ ] `AudioSource` trait plus a fake that replays a fixture WAV
+- [x] Resample to 16 kHz mono (Whisper's required input format), low-passed before interpolating. Without the filter, 48→16 kHz folds everything above 8 kHz down into the audible range; a test asserts a 15 kHz tone comes out attenuated rather than relocated to 1 kHz. `rubato` was rejected as far more than one fixed speech conversion needs — see the plan
+- [x] Cap recording length and handle the buffer-full case. Reaching the cap **stops and transcribes** rather than discarding: the user said something, and the last thing to do with it is throw it away because they said too much
+- [x] `AudioSource` trait plus a fake. The trait promises **16 kHz mono `f32`**, not "whatever the device gave us" — so the fake and the real implementation return the same thing and a fixture exercises the same code path a microphone would, rather than a parallel one
 - [ ] Handle device disconnect mid-recording
 
 **Transcription**
@@ -171,7 +171,7 @@ Two bugs the milestone only surfaced when run, both worth remembering:
 - [ ] First-run model download with progress, resumable, checksum-verified
 - [ ] Model selection in Settings (`base.en` default, `small`, `medium`)
 - [ ] Run inference on `spawn_blocking` — it is CPU-bound and long
-- [ ] `Transcriber` trait plus a fake
+- [x] `Transcriber` trait plus a fake. Synchronous on purpose — inference is CPU-bound for seconds, so making it `async` would suggest it yields when it would in fact occupy a runtime thread throughout. Rejects Whisper's known silence artefacts ("Thank you.", "[BLANK_AUDIO]"), matched on the whole string so a real question containing a polite phrase survives
 - [ ] Microphone permission request and denial handling
 
 ---
