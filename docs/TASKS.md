@@ -3,8 +3,8 @@
 Complete breakdown of what is done and what is pending, across every milestone.
 
 **Last updated:** 2026-08-07
-**Current phase:** M2 — code complete, awaiting manual verification before `0.2.0-alpha.1`
-**Current version:** `0.1.0-alpha.1` (released — see [VERSIONING.md](VERSIONING.md))
+**Current phase:** M3 — pre-flight and capability tiers, targeting `0.2.0-alpha.2`
+**Current version:** `0.2.0-alpha.1` (released — see [VERSIONING.md](VERSIONING.md))
 **Overall:** 57 / 143 tasks done (40%)
 
 Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
@@ -17,8 +17,8 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 |---|---|---|---:|---:|---|
 | **M0** | Foundations | — | 15 | 15 | ✅ Complete |
 | **M1** | Shell — tray, hotkey, windows | `0.1.0-alpha.1` | 15 | 16 | ✅ Shipped |
-| **M2** | Config & providers | `0.2.0-alpha.1` | 27 | 27 | 🔍 Verifying |
-| **M3** | Pre-flight & capability tiers | `0.2.0-alpha.1` | 0 | 14 | ⬜ |
+| **M2** | Config & providers | `0.2.0-alpha.1` | 27 | 27 | ✅ Shipped |
+| **M3** | Pre-flight & capability tiers | `0.2.0-alpha.2` | 0 | 14 | 🔨 Next |
 | **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 0 | 14 | ⬜ |
 | **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 0 | 13 | ⬜ |
 | **M6** | Session machine & panel UX | `0.5.0-beta.1` | 0 | 16 | ⬜ |
@@ -63,7 +63,7 @@ One task is carried into M3/M4/M6 rather than done here — see the note on the 
 - [x] Configure `.gitignore` for Rust, Node, SvelteKit, and Tauri build artifacts
 - [x] Set up `cargo fmt` and `cargo clippy -- -D warnings` in CI
 - [x] Set the version to `0.1.0-alpha.1` in `package.json`, with `tauri.conf.json > version` pointing at `"../package.json"` so there is one source of truth
-- [x] CI check asserting `Cargo.toml` and `package.json` versions agree
+- [x] CI check asserting `Cargo.toml` and `package.json` versions agree (`src-tauri/tests/version_sync.rs`, run by `cargo test`). Also asserts `tauri.conf.json` still delegates its version, and that the released version has a matching `CHANGELOG.md` heading — so a bump cannot land without its changelog entry, nor an entry without a bump
 
 **Tray**
 - [x] `tray.rs` — tray icon with menu (Open, Settings, Quit) using `TrayIconBuilder`
@@ -83,11 +83,18 @@ One task is carried into M3/M4/M6 rather than done here — see the note on the 
 
 ---
 
-## M2 — Config & providers
+## M2 — Config & providers ✅
 
 Ends with a working text loop: type in the panel, watch the answer stream back. No voice, no capture, no state machine.
 
 The milestone was widened from pure infrastructure for one reason: with the original plan nothing worked until M6, and streaming into the UI is where the surprises live — split SSE frames, backpressure, cancellation. Finding those against a local model in M2 costs hours; finding them in M6 under four other subsystems costs days of working out which one is at fault.
+
+Manually verified on macOS against Xiaomi MiMo: a provider configured from Settings, models discovered from the endpoint, answers streaming into the panel and rendering as markdown, cancellation via `Escape` and Stop, the global shortcut rebound and surviving a restart, and `[prompt] context` still in effect after Clear and after quitting.
+
+Three bugs the milestone only surfaced when run, all worth keeping in mind:
+- Cancelling aborted the task, and an aborted task cannot emit its own completion — so the panel waited forever for a message from something that no longer existed. The side that initiates a cancellation already knows the turn is over and must resolve its own state.
+- The keychain was read from a synchronous command, which Tauri runs on the main thread. It deadlocked at launch against an access dialog only the main thread could have drawn. See the hard rule in `CLAUDE.md` and the keychain section of the `macos-permissions` skill.
+- A settings field that saved only on `blur` never saved at all, because this window hides rather than closes and a focused field is not reliably blurred when its window disappears.
 
 - [x] `config.rs` — TOML schema with `serde`, loaded from the OS config dir
 - [x] Config validation with actionable error messages, not just parse failures
