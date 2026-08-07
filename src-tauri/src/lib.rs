@@ -13,6 +13,7 @@ pub mod llm;
 pub mod permissions;
 pub mod stt;
 pub mod tray;
+pub mod voice;
 pub mod windows;
 
 use std::sync::Mutex;
@@ -70,6 +71,8 @@ pub fn run() {
             let theme = config.appearance.theme;
             let shortcut = config.hotkey.toggle.clone();
             let active = config.active.clone();
+            let push_to_talk = config.hotkey.push_to_talk.clone();
+            let config_voice_model = config.voice.model;
 
             // Probe results, if any exist. Infallible: a missing or unreadable file
             // means nothing has been probed yet, which is an ordinary first-run
@@ -89,6 +92,10 @@ pub fn run() {
             let models_dir = app.path().app_data_dir()?.join("models");
 
             app.manage(AppState {
+                microphone: Box::new(crate::audio::Microphone::new()),
+                transcriber: Box::new(crate::stt::WhisperTranscriber::new(
+                    config_voice_model.path_in(&models_dir),
+                )),
                 http: reqwest::Client::new(),
                 http_blocking: reqwest::blocking::Client::new(),
                 models_dir,
@@ -119,9 +126,7 @@ pub fn run() {
             // A shortcut conflict must not prevent startup. The tray icon is
             // still a working way in, and killing launch over a hotkey clash
             // would leave the user with no entry point at all.
-            if let Err(error) = hotkey::register(app.handle(), &shortcut) {
-                tracing::warn!(%error, shortcut, "continuing without a global shortcut");
-            }
+            hotkey::register_all(app.handle(), &shortcut, &push_to_talk);
 
             Ok(())
         })

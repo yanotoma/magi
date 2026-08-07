@@ -5,7 +5,7 @@ Complete breakdown of what is done and what is pending, across every milestone.
 **Last updated:** 2026-08-07
 **Current phase:** M4 — audio and speech-to-text, targeting `0.3.0-alpha.1`
 **Current version:** `0.2.0-alpha.2` (released — see [VERSIONING.md](VERSIONING.md))
-**Overall:** 90 / 149 tasks done (60%)
+**Overall:** 94 / 153 tasks done (61%)
 
 Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 
@@ -19,11 +19,11 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 | **M1** | Shell — tray, hotkey, windows | `0.1.0-alpha.1` | 15 | 16 | ✅ Shipped |
 | **M2** | Config & providers | `0.2.0-alpha.1` | 28 | 28 | ✅ Shipped |
 | **M3** | Pre-flight & capability tiers | `0.2.0-alpha.2` | 13 | 14 | ✅ Shipped |
-| **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 19 | 19 | 🔨 Next |
+| **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 23 | 23 | 🔨 Next |
 | **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 0 | 13 | ⬜ |
 | **M6** | Session machine & panel UX | `0.5.0-beta.1` | 0 | 16 | ⬜ |
 | **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 14 | ⬜ |
-| — | **v1 total** | `1.0.0` | **90** | **135** | |
+| — | **v1 total** | `1.0.0` | **94** | **139** | |
 | **M8** | v2 — wake word & TTS | `1.1.0` | 0 | 9 | 🔮 Post-v1 |
 | **M9** | v3 — computer use | `1.2.0` | 0 | 5 | 🔮 Post-v1 |
 
@@ -163,6 +163,17 @@ Two bugs the milestone only surfaced when run, both worth remembering:
 - [x] Cap recording length and handle the buffer-full case. Reaching the cap **stops and transcribes** rather than discarding: the user said something, and the last thing to do with it is throw it away because they said too much
 - [x] `AudioSource` trait plus a fake. The trait promises **16 kHz mono `f32`**, not "whatever the device gave us" — so the fake and the real implementation return the same thing and a fixture exercises the same code path a microphone would, rather than a parallel one
 - [x] Handle device disconnect mid-recording. Flagged from the error callback and read on stop, so unplugging a microphone mid-sentence returns the sentence. `ErrorKind::Xrun` is deliberately not treated as a disconnection: it is a dropout on a stream that is still alive
+
+**Push-to-talk**
+
+These were missing from the list, not from the plan. M4's checkboxes enumerated the components and forgot the wiring, so the milestone reached 19/19 with `Microphone` and `WhisperTranscriber` never constructed anywhere in the app — the capability existed and nothing called it. `VERSIONING.md` promises `0.3.0-alpha.1` is "speak, get a local transcript", and a checklist is not the contract.
+
+Deliberately not the session state machine, which is M6's. This is the smallest wiring that makes the promise true.
+
+- [x] A **second** hotkey for voice (`Alt+Shift+Space`), configurable, rather than overloading the toggle. Distinguishing a tap from a hold on one key means the panel toggle fires on release and behind a timer, which would degrade the one interaction that already works. Two identical shortcuts are refused at load: the OS gives the combination to whichever registered first and the other silently never fires
+- [x] Hold to record, release to transcribe, with the transcript **appended** to whatever is already in the input. Someone who typed half a question and spoke the rest meant both
+- [x] Transcription on `spawn_blocking`. On the main thread it would freeze the tray and the hotkey; on an async worker it would hold a runtime thread for its whole duration
+- [x] Panel indicator with two distinct states. Recording ends when you let go and transcription ends when it ends, so being told which you are waiting for is the difference between patience and wondering whether the key registered. The dot is red only while audio is actually going in
 
 **Transcription**
 - [x] `stt` module — `whisper-rs` integration. Written against the 0.16 source, whose segment API is an iterator of `WhisperSegment` rather than the `full_get_segment_text(i)` that documentation still shows

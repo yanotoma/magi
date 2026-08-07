@@ -60,6 +60,14 @@ pub struct AppState {
     /// read on the way to every request.
     pub capabilities: Mutex<CapabilityCache>,
 
+    /// The microphone. Behind the trait, so a test or a future headless mode can
+    /// substitute a fake without this module knowing.
+    pub microphone: Box<dyn crate::audio::AudioSource>,
+
+    /// The speech model. Loads on first use, so holding one here costs nothing until
+    /// somebody speaks.
+    pub transcriber: Box<dyn crate::stt::Transcriber>,
+
     /// Where speech models live: the app data directory plus `models/`.
     ///
     /// Separate from `config_dir` because these are a different kind of thing — a

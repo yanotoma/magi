@@ -320,6 +320,38 @@ export const PRESETS: ReadonlyArray<{
   },
 ];
 
+/**
+ * What the panel is told while a voice turn happens.
+ *
+ * Distinct states rather than a boolean: recording ends when you let go, and
+ * transcription ends when it ends, and those feel different to wait through.
+ */
+export type VoiceState = "idle" | "recording" | "transcribing";
+
+/**
+ * Subscribes to push-to-talk events.
+ *
+ * Bundled so a caller cannot unsubscribe from the state and leak the transcript.
+ *
+ * `transcript` delivers the words to put in the input — not to send. Voice fills the
+ * box; asking is still the user's move, and a mis-transcription sent straight to a model
+ * is a wrong question asked confidently.
+ */
+export const onVoiceEvents = async (handlers: {
+  state: (state: VoiceState) => void;
+  transcript: (text: string) => void;
+  notice: (message: string) => void;
+  error: (message: string) => void;
+}): Promise<UnlistenFn> => {
+  const unlisten = await Promise.all([
+    listen<VoiceState>("magi://voice", (e) => handlers.state(e.payload)),
+    listen<string>("magi://transcript", (e) => handlers.transcript(e.payload)),
+    listen<string>("magi://voice-notice", (e) => handlers.notice(e.payload)),
+    listen<string>("magi://voice-error", (e) => handlers.error(e.payload)),
+  ]);
+  return () => unlisten.forEach((off) => off());
+};
+
 /** One history entry, as the backend expects it. */
 export type TurnMessage = { role: string; content: string };
 

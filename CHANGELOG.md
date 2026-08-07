@@ -7,6 +7,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ## [Unreleased]
 
 ### Added
+- **Talk to Magi.** Hold `Alt+Shift+Space`, say something, let go. It transcribes on your Mac and puts the words in the panel's input — you still decide whether to send them. Configurable, and separate from the panel shortcut so neither has to be timed
 - **Local speech-to-text.** Settings → Voice picks a model — Base, Small or Medium — downloads it with a progress bar, and shows whether your microphone is available. Transcription runs entirely on your Mac; no audio is sent anywhere
 - The microphone permission is shown as a live status row rather than discovered when a recording fails, with a button that opens the right System Settings pane
 - Downloaded models can be deleted again

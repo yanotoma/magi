@@ -136,13 +136,37 @@ pub struct AppearanceConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HotkeyConfig {
+    /// Defaulted, like every other field here, so each one is independently optional.
+    ///
+    /// Without this, `[hotkey]` carrying only `push_to_talk` fails to parse with
+    /// "missing field `toggle`" — which in a file whose whole point is being edited by
+    /// hand means changing one shortcut obliges you to restate the other.
+    #[serde(default = "default_toggle")]
     pub toggle: String,
+
+    /// Held to record, released to transcribe.
+    ///
+    /// A second shortcut rather than a gesture on `toggle`. Telling a tap from a hold on
+    /// one key means the panel can only toggle on *release*, behind a timer — which
+    /// would put latency and a heuristic into the one interaction that already works
+    /// well. Two keys, two jobs, nothing to get wrong.
+    #[serde(default = "default_push_to_talk")]
+    pub push_to_talk: String,
+}
+
+fn default_toggle() -> String {
+    crate::hotkey::DEFAULT_SHORTCUT.to_string()
+}
+
+fn default_push_to_talk() -> String {
+    crate::hotkey::DEFAULT_PUSH_TO_TALK.to_string()
 }
 
 impl Default for HotkeyConfig {
     fn default() -> Self {
         Self {
             toggle: crate::hotkey::DEFAULT_SHORTCUT.to_string(),
+            push_to_talk: default_push_to_talk(),
         }
     }
 }
@@ -281,6 +305,29 @@ impl Config {
             }
         })?;
 
+        crate::hotkey::validate_shortcut(&self.hotkey.push_to_talk).map_err(|e| {
+            ConfigError::InvalidHotkey {
+                reason: format!("push_to_talk: {e}"),
+            }
+        })?;
+
+        // Two shortcuts that are the same string means the OS gives one of them to
+        // whichever registered first and the other silently never fires. Caught here so
+        // it reads as a configuration mistake rather than as a broken hotkey.
+        if self
+            .hotkey
+            .toggle
+            .eq_ignore_ascii_case(&self.hotkey.push_to_talk)
+        {
+            return Err(ConfigError::InvalidHotkey {
+                reason: format!(
+                    "toggle and push_to_talk are both '{}'. They must differ, or only one \
+                     of them will ever fire.",
+                    self.hotkey.toggle
+                ),
+            });
+        }
+
         let mut seen = HashSet::new();
         for provider in &self.providers {
             if !seen.insert(provider.id.as_str()) {
@@ -351,6 +398,89 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn push_to_talk_has_its_own_default() {
+        let config = Config::from_toml("").expect("an empty file is valid");
+        assert_eq!(
+            config.hotkey.push_to_talk,
+            crate::hotkey::DEFAULT_PUSH_TO_TALK
+        );
+        assert_ne!(config.hotkey.push_to_talk, config.hotkey.toggle);
+    }
+
+    #[test]
+    fn a_config_written_before_push_to_talk_existed_still_loads() {
+        // `[hotkey]` with only `toggle` is what every existing installation has. Refusing
+        // it would break the app for everyone who upgrades.
+        let config = Config::from_toml(
+            r#"
+            [hotkey]
+            toggle = "Alt+Space"
+            "#,
+        )
+        .expect("an older config must still load");
+        assert_eq!(
+            config.hotkey.push_to_talk,
+            crate::hotkey::DEFAULT_PUSH_TO_TALK
+        );
+    }
+
+    #[test]
+    fn two_identical_shortcuts_are_refused() {
+        // The OS gives the combination to whichever registered first; the other silently
+        // never fires. Caught here so it reads as a configuration mistake.
+        let error = Config::from_toml(
+            r#"
+            [hotkey]
+            toggle = "Alt+Space"
+            push_to_talk = "alt+space"
+            "#,
+        )
+        .expect_err("a collision must be refused");
+        assert!(matches!(error, ConfigError::InvalidHotkey { .. }));
+        assert!(error.to_string().contains("must differ"), "got: {error}");
+    }
+
+    #[test]
+    fn each_hotkey_field_is_independently_optional() {
+        // A hand-edited file should be able to set one shortcut without restating the
+        // other. Before `toggle` had a default, this failed with "missing field".
+        let only_ptt = Config::from_toml(
+            r#"
+            [hotkey]
+            push_to_talk = "Control+Shift+M"
+            "#,
+        )
+        .expect("setting only push_to_talk must work");
+        assert_eq!(only_ptt.hotkey.toggle, crate::hotkey::DEFAULT_SHORTCUT);
+        assert_eq!(only_ptt.hotkey.push_to_talk, "Control+Shift+M");
+
+        let only_toggle = Config::from_toml(
+            r#"
+            [hotkey]
+            toggle = "Control+Shift+K"
+            "#,
+        )
+        .expect("setting only toggle must work");
+        assert_eq!(only_toggle.hotkey.toggle, "Control+Shift+K");
+        assert_eq!(
+            only_toggle.hotkey.push_to_talk,
+            crate::hotkey::DEFAULT_PUSH_TO_TALK
+        );
+    }
+
+    #[test]
+    fn an_invalid_push_to_talk_names_which_field_is_wrong() {
+        let error = Config::from_toml(
+            r#"
+            [hotkey]
+            push_to_talk = "Space"
+            "#,
+        )
+        .expect_err("a bare key must be refused");
+        assert!(error.to_string().contains("push_to_talk"), "got: {error}");
+    }
 
     #[test]
     fn the_voice_model_defaults_to_the_smallest_download() {

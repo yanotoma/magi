@@ -1,7 +1,14 @@
 <script lang="ts">
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import MagiSpinner from "$lib/MagiSpinner.svelte";
-  import { cancelTurn, getAppearance, onTurnEvents, sendTextTurn } from "$lib/ipc";
+  import {
+    cancelTurn,
+    getAppearance,
+    onTurnEvents,
+    onVoiceEvents,
+    sendTextTurn,
+    type VoiceState,
+  } from "$lib/ipc";
   import { renderMarkdown } from "$lib/markdown";
   import {
     appendThinking,
@@ -16,7 +23,10 @@
   } from "$lib/conversation.svelte";
 
   let input = $state("");
+  let voice = $state<VoiceState>("idle");
+  let voiceNotice = $state<string | null>(null);
   let thread = $state<HTMLElement | null>(null);
+  let composer = $state<HTMLTextAreaElement | null>(null);
   let showThinking = $state(false);
   let expanded = $state<Set<number>>(new Set());
 
@@ -31,6 +41,28 @@
       thinking: appendThinking,
       done: finishTurn,
       error: failTurn,
+    }).then((off) => (stop = off));
+    return () => stop?.();
+  });
+
+  // Push-to-talk. The hotkey works whether or not this window is visible, so the
+  // subscription is not tied to the panel being open — the transcript has to be waiting
+  // in the input when it appears.
+  $effect(() => {
+    let stop: (() => void) | undefined;
+    onVoiceEvents({
+      state: (next) => (voice = next),
+      transcript: (text) => {
+        // Appended rather than replacing. Someone who typed half a question and then
+        // spoke the rest meant both, and discarding what they typed would be the more
+        // surprising choice.
+        input = input.trim().length > 0 ? `${input.trimEnd()} ${text}` : text;
+        voiceNotice = null;
+        // Focus follows the words, so Enter sends without reaching for the mouse.
+        composer?.focus();
+      },
+      notice: (message) => (voiceNotice = message),
+      error: (message) => failTurn(message),
     }).then((off) => (stop = off));
     return () => stop?.();
   });
@@ -182,8 +214,28 @@
     {/if}
   </div>
 
+  {#if voice !== "idle" || voiceNotice}
+    <!--
+      Two states, not one spinner. Recording ends when you let go; transcription ends
+      when it ends, and being told which you are waiting for is the difference between
+      patience and wondering whether the key registered.
+    -->
+    <div class="voice" class:recording={voice === "recording"}>
+      {#if voice === "recording"}
+        <span class="pulse" aria-hidden="true"></span>
+        <span>Listening… release to transcribe</span>
+      {:else if voice === "transcribing"}
+        <span class="pulse" aria-hidden="true"></span>
+        <span>Transcribing on this Mac…</span>
+      {:else if voiceNotice}
+        <span>{voiceNotice}</span>
+      {/if}
+    </div>
+  {/if}
+
   <div class="composer">
     <textarea
+      bind:this={composer}
       bind:value={input}
       onkeydown={onInputKeydown}
       placeholder="Ask Magi…"
@@ -492,6 +544,43 @@
     margin: 0;
     overflow-wrap: anywhere;
     padding: 7px 9px;
+  }
+
+  /* Sits between the thread and the composer, where the answer will appear — the same
+     place the eye is already looking. */
+  .voice {
+    align-items: center;
+    display: flex;
+    font-size: 12px;
+    gap: 7px;
+    margin-bottom: 7px;
+    opacity: 0.75;
+  }
+
+  .pulse {
+    animation: breathe 1.4s ease-in-out infinite;
+    background: currentColor;
+    border-radius: 50%;
+    height: 6px;
+    width: 6px;
+  }
+
+  /* Red only while actually capturing. A recording indicator that looks the same during
+     transcription would say audio is still going in when it has stopped. */
+  .voice.recording .pulse {
+    background: rgb(240, 90, 90);
+  }
+
+  @keyframes breathe {
+    50% {
+      opacity: 0.3;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .pulse {
+      animation: none;
+    }
   }
 
   .composer {
