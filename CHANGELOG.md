@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.2.0-alpha.2] - 2026-08-07
+
 Magi now checks what a model can do before relying on it.
 
 ### Added
@@ -80,6 +82,7 @@ First build. The shell exists; there is nothing intelligent behind it yet.
 - Requires Accessibility permission for the global shortcut
 - Not signed or notarized — there is no downloadable build
 
-[Unreleased]: https://github.com/yanotoma/magi/compare/v0.2.0-alpha.1...HEAD
+[Unreleased]: https://github.com/yanotoma/magi/compare/v0.2.0-alpha.2...HEAD
+[0.2.0-alpha.2]: https://github.com/yanotoma/magi/compare/v0.2.0-alpha.1...v0.2.0-alpha.2
 [0.2.0-alpha.1]: https://github.com/yanotoma/magi/compare/v0.1.0-alpha.1...v0.2.0-alpha.1
 [0.1.0-alpha.1]: https://github.com/yanotoma/magi/releases/tag/v0.1.0-alpha.1

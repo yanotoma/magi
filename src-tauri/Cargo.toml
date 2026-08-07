@@ -1,6 +1,6 @@
 [package]
 name = "magi"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 description = "A background AI agent for your desktop"
 authors = ["The Magi contributors"]
 license = "Apache-2.0"

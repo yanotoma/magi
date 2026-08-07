@@ -287,6 +287,21 @@ mod tests {
     use crate::llm::provider::{FakeProvider, ToolCall};
     use serde_json::json;
 
+    /// The digit the probe actually asks about, and its English name.
+    ///
+    /// Derived rather than written out. These tests hardcoded `"7"` and `"seven"`,
+    /// so changing `PROBE_DIGIT` to a more legible glyph left five of them asserting
+    /// against a digit the probe no longer sends — the same mistake as the test that
+    /// pinned `max_tokens` to a literal: an assertion about a value rather than about
+    /// the behaviour.
+    fn digit() -> String {
+        PROBE_DIGIT.to_string()
+    }
+
+    fn word() -> &'static str {
+        DIGIT_WORDS[(PROBE_DIGIT % 10) as usize]
+    }
+
     fn text(body: &str) -> ProbeReply {
         ProbeReply {
             text: body.to_string(),
@@ -316,21 +331,26 @@ mod tests {
 
     #[test]
     fn the_digit_alone_passes() {
-        assert!(saw_the_digit(&text("7")));
-        assert!(saw_the_digit(&text("The digit is 7.")));
+        assert!(saw_the_digit(&text(&digit())));
+        assert!(saw_the_digit(&text(&format!("The digit is {}.", digit()))));
     }
 
     #[test]
     fn the_digit_as_a_word_passes() {
         // A model reading a numeral may well answer in words, and both are right.
-        assert!(saw_the_digit(&text("seven")));
-        assert!(saw_the_digit(&text("It shows the number Seven")));
+        assert!(saw_the_digit(&text(word())));
+        assert!(saw_the_digit(&text(&format!(
+            "It shows the number {}",
+            word().to_uppercase()
+        ))));
     }
 
     #[test]
     fn a_wrong_digit_fails() {
-        assert!(!saw_the_digit(&text("3")));
-        assert!(!saw_the_digit(&text("It looks like an 8.")));
+        // Any digit other than the one the probe sends.
+        let wrong = (PROBE_DIGIT + 1) % 10;
+        assert!(!saw_the_digit(&text(&wrong.to_string())));
+        assert!(!saw_the_digit(&text("It looks like a different shape.")));
     }
 
     #[test]
@@ -352,13 +372,18 @@ mod tests {
     fn a_denial_fails_even_when_it_names_the_right_digit() {
         // The subtle one. A hedge that happens to guess correctly must not pass, or
         // a blind model gets promoted to a vision tier on the strength of a guess.
-        assert!(!saw_the_digit(&text(
-            "I cannot see any image, but if I had to guess it would be a 7."
-        )));
-        assert!(!saw_the_digit(&text("I don't see an image. Perhaps 7?")));
-        assert!(!saw_the_digit(&text(
-            "I'm unable to see images. Is it seven?"
-        )));
+        assert!(!saw_the_digit(&text(&format!(
+            "I cannot see any image, but if I had to guess it would be a {}.",
+            digit()
+        ))));
+        assert!(!saw_the_digit(&text(&format!(
+            "I don't see an image. Perhaps {}?",
+            digit()
+        ))));
+        assert!(!saw_the_digit(&text(&format!(
+            "I'm unable to see images. Is it {}?",
+            word()
+        ))));
     }
 
     #[test]
@@ -380,9 +405,10 @@ mod tests {
     fn truncation_does_not_override_a_correct_answer() {
         // A model that named the digit and then ran out of room while elaborating
         // has passed. The flag is diagnostic, not a veto.
-        assert!(saw_the_digit(&truncated(
-            "The digit shown is 7, and the image is"
-        )));
+        assert!(saw_the_digit(&truncated(&format!(
+            "The digit shown is {}, and the image is",
+            digit()
+        ))));
     }
 
     #[test]
@@ -537,7 +563,7 @@ mod tests {
     async fn a_fully_capable_model_reaches_the_agentic_tier() {
         let provider = FakeProvider::answering_probes(vec![
             Ok(text("ok")),
-            Ok(text("7")),
+            Ok(text(&digit())),
             Ok(call("get_weather", json!({"city": "Kitchener"}))),
             Ok(text(r#"{"city":"Kitchener","celsius":21}"#)),
         ]);
@@ -562,7 +588,7 @@ mod tests {
         // than returning one canned answer.
         let provider = FakeProvider::answering_probes(vec![
             Ok(text("ok")),
-            Ok(text("seven")),
+            Ok(text(word())),
             Ok(text("I would call get_weather('Kitchener') to check.")),
             Ok(text("It's about 21 degrees.")),
         ]);

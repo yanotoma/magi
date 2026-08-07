@@ -3,8 +3,8 @@
 Complete breakdown of what is done and what is pending, across every milestone.
 
 **Last updated:** 2026-08-07
-**Current phase:** M3 — pre-flight and capability tiers, targeting `0.2.0-alpha.2`
-**Current version:** `0.2.0-alpha.1` (released — see [VERSIONING.md](VERSIONING.md))
+**Current phase:** M4 — audio and speech-to-text, targeting `0.3.0-alpha.1`
+**Current version:** `0.2.0-alpha.2` (released — see [VERSIONING.md](VERSIONING.md))
 **Overall:** 71 / 144 tasks done (49%)
 
 Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
@@ -18,8 +18,8 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 | **M0** | Foundations | — | 15 | 15 | ✅ Complete |
 | **M1** | Shell — tray, hotkey, windows | `0.1.0-alpha.1` | 15 | 16 | ✅ Shipped |
 | **M2** | Config & providers | `0.2.0-alpha.1` | 28 | 28 | ✅ Shipped |
-| **M3** | Pre-flight & capability tiers | `0.2.0-alpha.2` | 13 | 14 | 🔍 Verifying |
-| **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 0 | 14 | ⬜ |
+| **M3** | Pre-flight & capability tiers | `0.2.0-alpha.2` | 13 | 14 | ✅ Shipped |
+| **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 0 | 14 | 🔨 Next |
 | **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 0 | 13 | ⬜ |
 | **M6** | Session machine & panel UX | `0.5.0-beta.1` | 0 | 16 | ⬜ |
 | **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 14 | ⬜ |
@@ -127,7 +127,15 @@ Three bugs the milestone only surfaced when run, all worth keeping in mind:
 
 ---
 
-## M3 — Pre-flight & capability tiers
+## M3 — Pre-flight & capability tiers ✅
+
+Manually verified on macOS against Xiaomi MiMo: `mimo-v2.5` probes to *Agentic capture* (reads the test image, calls the tool, declines the JSON schema) while `mimo-v2.5-pro` on the same endpoint and key probes to *Text only*. Per-model tiers on one provider is exactly why results are keyed by model.
+
+One task is carried rather than done — the degraded tray icon, below. It is a design problem that needs looking at in a real menu bar, not a coding one.
+
+Two bugs the milestone only surfaced when run, both worth remembering:
+- The vision probe reported a sighted model as blind, because the generated seven-segment digit had unfilled corners and rendered as two detached strokes. The model read it correctly and answered `1`. Ten tests passed; what found it was rendering the PNG and looking at it. Legibility is not directly testable — connectivity is, and a flood fill now asserts every digit is one connected shape.
+- Probes were given 256 tokens on the reasoning that they only need a word. Thinking tokens are billed whether or not the limit fits them, so a tight limit truncates the answer rather than avoiding its cost, and an empty reply reads as a failed capability.
 
 - [x] `llm::preflight` module scaffolding — verdict functions pure and separate from the async orchestration, so every way a model can almost-pass is a unit test
 - [x] Probe 1 — reachability, distinguishing bad URL / bad key / model not pulled. A trivial completion rather than `GET /v1/models`: a provider can list a model it cannot serve, and the Anthropic-shaped endpoints have no listing route
