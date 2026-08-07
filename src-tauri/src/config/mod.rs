@@ -219,7 +219,14 @@ impl Config {
         }
     }
 
+    /// Validates, then writes.
+    ///
+    /// Validation happens on the way out as well as on the way in. Loading is
+    /// not the only path that produces a `Config` — the settings screen mutates
+    /// one in memory — and writing an invalid file would mean the app refuses to
+    /// start next launch, with the damage already on disk.
     pub fn save(&self, dir: &Path) -> Result<(), ConfigError> {
+        self.validate()?;
         fs::create_dir_all(dir)?;
         fs::write(Self::path_in(dir), toml::to_string_pretty(self)?)?;
         Ok(())
@@ -423,6 +430,30 @@ mod tests {
         .expect("a provider awaiting discovery must load");
         assert!(config.providers[0].models.is_empty());
         assert!(config.active_provider().is_none());
+    }
+
+    #[test]
+    fn saving_an_invalid_config_is_refused() {
+        // The settings screen mutates a Config in memory, so loading is not the
+        // only way to produce one. Writing an invalid file would mean the app
+        // refuses to start next launch with the damage already on disk.
+        let dir = tempdir();
+        let config = Config {
+            active: Some(ActiveModel {
+                provider: "not-configured".into(),
+                model: "whatever".into(),
+            }),
+            ..Config::default()
+        };
+
+        assert!(matches!(
+            config.save(dir.path()),
+            Err(ConfigError::UnknownActiveProvider(_))
+        ));
+        assert!(
+            !Config::path_in(dir.path()).exists(),
+            "nothing may be written when validation fails"
+        );
     }
 
     #[test]

@@ -4,6 +4,7 @@
 //! together here, so there is one place to read to understand what happens at
 //! startup.
 
+pub mod commands;
 pub mod config;
 pub mod error;
 pub mod hotkey;
@@ -11,7 +12,13 @@ pub mod llm;
 pub mod tray;
 pub mod windows;
 
-use tauri::WindowEvent;
+use std::sync::Mutex;
+
+use tauri::{Manager, WindowEvent};
+
+use crate::commands::AppState;
+use crate::config::secrets::KeyringStore;
+use crate::config::Config;
 
 /// Builds and runs the Tauri application.
 ///
@@ -41,6 +48,29 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
+            let config_dir = app.path().app_config_dir()?;
+
+            // A config that fails to parse must not stop the app from starting.
+            // The user would have no window in which to be told why, and no way
+            // to reach Settings to fix it. Fall back to defaults, say so loudly
+            // in the log, and leave the broken file untouched so it can be
+            // repaired rather than silently overwritten.
+            let config = Config::load(&config_dir).unwrap_or_else(|error| {
+                tracing::error!(
+                    %error,
+                    path = %Config::path_in(&config_dir).display(),
+                    "config could not be loaded; starting with defaults and leaving the file alone"
+                );
+                Config::default()
+            });
+
+            app.manage(AppState {
+                http: reqwest::Client::new(),
+                config: Mutex::new(config),
+                config_dir,
+                secrets: Box::new(KeyringStore),
+            });
+
             tray::init(app)?;
 
             // A shortcut conflict must not prevent startup. The tray icon is
@@ -52,6 +82,13 @@ pub fn run() {
 
             Ok(())
         })
+        .invoke_handler(tauri::generate_handler![
+            commands::get_config,
+            commands::save_provider,
+            commands::remove_provider,
+            commands::set_active_model,
+            commands::discover_models,
+        ])
         .on_window_event(|window, event| {
             // Closing a window must never quit a tray app. Hide instead, and let
             // the tray's Quit item be the only way out.
