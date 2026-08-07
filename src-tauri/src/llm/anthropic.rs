@@ -275,7 +275,14 @@ pub fn parse_probe_reply(url: &str, body: &str) -> Result<ProbeReply, LlmError> 
         }
     }
 
-    Ok(ProbeReply { text, tool_calls })
+    // `max_tokens` here is what the OpenAI family calls `finish_reason: "length"`.
+    let truncated = parsed.get("stop_reason").and_then(|r| r.as_str()) == Some("max_tokens");
+
+    Ok(ProbeReply {
+        text,
+        tool_calls,
+        truncated,
+    })
 }
 
 /// Turns an HTTP failure into something the user can act on.
@@ -636,8 +643,15 @@ mod probe_tests {
 
     #[test]
     fn max_tokens_is_always_present() {
-        // Required by this API. Omitting it is an error, not a default.
-        assert_eq!(build_probe(&probe())["max_tokens"], json!(256));
+        // Required by this API. Omitting it is an error, not a default. The
+        // assertion is that the field is present and carries the configured budget,
+        // not that the budget is any particular number.
+        let body = build_probe(&probe());
+        assert!(body.get("max_tokens").is_some());
+        assert_eq!(
+            body["max_tokens"],
+            json!(crate::llm::provider::PROBE_MAX_TOKENS)
+        );
     }
 
     #[test]
@@ -791,6 +805,29 @@ mod probe_tests {
         )
         .expect("valid");
         assert!(reply.tool_calls.is_empty());
+    }
+
+    #[test]
+    fn a_max_tokens_stop_reason_marks_the_reply_truncated() {
+        // What the OpenAI family calls `finish_reason: "length"`. Different key,
+        // different value, same meaning — and the reason the flag is set in each
+        // implementation rather than inferred by a shared helper.
+        let reply = parse_probe_reply(
+            "https://api.anthropic.com/v1/messages",
+            r#"{"stop_reason":"max_tokens","content":[{"type":"text","text":"The dig"}]}"#,
+        )
+        .expect("valid");
+        assert!(reply.truncated);
+    }
+
+    #[test]
+    fn an_end_turn_stop_reason_is_not_truncated() {
+        let reply = parse_probe_reply(
+            "https://api.anthropic.com/v1/messages",
+            r#"{"stop_reason":"end_turn","content":[{"type":"text","text":"seven"}]}"#,
+        )
+        .expect("valid");
+        assert!(!reply.truncated);
     }
 
     #[test]

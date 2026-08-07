@@ -174,13 +174,38 @@ impl ProbeRequest {
             image: None,
             tool: None,
             json_schema: None,
-            // Small on purpose. Every probe wants a word or a short object, and a
-            // generous limit here just pays for a model that decides to explain
-            // itself at length before answering.
-            max_tokens: 256,
+            max_tokens: PROBE_MAX_TOKENS,
         }
     }
 }
+
+/// The token limit for a probe.
+///
+/// Generous, and the first version of this was not — it was 256, on the reasoning
+/// that every probe wants a word or a short object so a bigger limit would only pay
+/// for a model that likes to explain itself.
+///
+/// That reasoning is backwards for a reasoning model, which is most of the
+/// interesting ones. Thinking tokens are generated and billed whether or not the
+/// limit accommodates them, so a tight `max_tokens` does not avoid the cost — it
+/// truncates the answer that cost was spent producing. Set to 256, a model that
+/// thinks for three hundred tokens about a picture of a `7` returns empty content,
+/// and the vision verdict reads that as "did not see the image".
+///
+/// So the cheap-looking limit was the expensive one: it reported the most capable
+/// models as the least capable. This is sized to leave room for thinking plus a
+/// short answer.
+pub const PROBE_MAX_TOKENS: u32 = 2048;
+
+// A compile-time floor rather than a test. Lowering this below the room a reasoning
+// model needs is the specific mistake that reported vision-capable models as blind,
+// and a build error catches it at the moment someone tries rather than in a suite
+// they might not have run yet.
+const _: () = assert!(
+    PROBE_MAX_TOKENS >= 1024,
+    "thinking tokens are billed whether or not the limit fits them, so a tight probe \
+     budget truncates the answer that cost was spent producing instead of avoiding it"
+);
 
 /// What came back from a probe.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -191,6 +216,15 @@ pub struct ProbeReply {
     /// when it described a call in prose, which is the case the tool probe exists
     /// to catch.
     pub tool_calls: Vec<ToolCall>,
+
+    /// Whether the reply stopped at the token limit rather than finishing.
+    ///
+    /// Recorded so that a probe which failed because the answer was cut off is
+    /// distinguishable from one that failed because the model got it wrong. Those
+    /// look identical in the verdict — both produce "no digit found" — but one is a
+    /// Magi problem and the other is a model limitation, and reporting the first as
+    /// the second is how a capable model gets marked incapable.
+    pub truncated: bool,
 }
 
 /// One turn in, events out; plus a single-shot probe for pre-flight.

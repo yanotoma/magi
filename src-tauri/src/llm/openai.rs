@@ -213,6 +213,18 @@ pub fn parse_probe_reply(url: &str, body: &str) -> Result<ProbeReply, LlmError> 
         .unwrap_or_default()
         .to_string();
 
+    // "length" means the token limit cut the answer off. Worth carrying, because a
+    // truncated probe and a wrong answer are indistinguishable in the verdict — and
+    // a reasoning model can spend the whole budget thinking before it writes
+    // anything at all.
+    let truncated = parsed
+        .get("choices")
+        .and_then(|c| c.as_array())
+        .and_then(|c| c.first())
+        .and_then(|c| c.get("finish_reason"))
+        .and_then(|r| r.as_str())
+        == Some("length");
+
     let tool_calls = message
         .get("tool_calls")
         .and_then(|c| c.as_array())
@@ -241,7 +253,11 @@ pub fn parse_probe_reply(url: &str, body: &str) -> Result<ProbeReply, LlmError> 
         })
         .unwrap_or_default();
 
-    Ok(ProbeReply { text, tool_calls })
+    Ok(ProbeReply {
+        text,
+        tool_calls,
+        truncated,
+    })
 }
 
 /// Turns an HTTP failure into something the user can act on.
@@ -612,7 +628,12 @@ mod probe_tests {
         let body = build_probe(&probe());
         assert!(body["messages"][0]["content"].is_string());
         assert_eq!(body["stream"], json!(false));
-        assert_eq!(body["max_tokens"], json!(256));
+        // The value, not a literal. Hardcoding 256 here is what made this test pin
+        // the budget that was starving reasoning models of room to answer.
+        assert_eq!(
+            body["max_tokens"],
+            json!(crate::llm::provider::PROBE_MAX_TOKENS)
+        );
     }
 
     #[test]
@@ -750,6 +771,30 @@ mod probe_tests {
 
         assert_eq!(reply.tool_calls.len(), 1);
         assert_eq!(reply.tool_calls[0].arguments, json!({}));
+    }
+
+    #[test]
+    fn a_length_finish_reason_marks_the_reply_truncated() {
+        // The signal that separates "the model got it wrong" from "the answer was
+        // cut off". A reasoning model can spend the whole budget thinking and
+        // return empty content, which every verdict reads as a failure.
+        let reply = parse_probe_reply(
+            "http://x/v1/chat/completions",
+            r#"{"choices":[{"finish_reason":"length","message":{"content":""}}]}"#,
+        )
+        .expect("valid");
+        assert!(reply.truncated);
+        assert!(reply.text.is_empty());
+    }
+
+    #[test]
+    fn a_normal_finish_is_not_truncated() {
+        let reply = parse_probe_reply(
+            "http://x/v1/chat/completions",
+            r#"{"choices":[{"finish_reason":"stop","message":{"content":"seven"}}]}"#,
+        )
+        .expect("valid");
+        assert!(!reply.truncated);
     }
 
     #[test]

@@ -206,7 +206,22 @@ pub async fn run(provider: &dyn Provider, model: &str) -> Capabilities {
         request.image = Some(image);
 
         capabilities.vision = match provider.probe(request).await {
-            Ok(reply) => saw_the_digit(&reply),
+            Ok(reply) => {
+                let saw = saw_the_digit(&reply);
+                // A truncated failure is a Magi problem wearing a model
+                // problem's clothes: the model may well have been about to name
+                // the digit when the budget ran out. Logged apart so a bug report
+                // says which one happened, instead of leaving both looking like a
+                // model that cannot see.
+                if !saw && reply.truncated {
+                    tracing::warn!(
+                        model,
+                        "pre-flight: the vision reply hit the token limit before answering — \
+                         this is a truncation, not necessarily a model without vision"
+                    );
+                }
+                saw
+            }
             Err(error) => {
                 tracing::info!(%error, model, "pre-flight: vision probe failed");
                 false
@@ -275,17 +290,25 @@ mod tests {
     fn text(body: &str) -> ProbeReply {
         ProbeReply {
             text: body.to_string(),
-            tool_calls: Vec::new(),
+            ..Default::default()
+        }
+    }
+
+    fn truncated(body: &str) -> ProbeReply {
+        ProbeReply {
+            text: body.to_string(),
+            truncated: true,
+            ..Default::default()
         }
     }
 
     fn call(name: &str, arguments: serde_json::Value) -> ProbeReply {
         ProbeReply {
-            text: String::new(),
             tool_calls: vec![ToolCall {
                 name: name.to_string(),
                 arguments,
             }],
+            ..Default::default()
         }
     }
 
@@ -336,6 +359,41 @@ mod tests {
         assert!(!saw_the_digit(&text(
             "I'm unable to see images. Is it seven?"
         )));
+    }
+
+    #[test]
+    fn a_truncated_reply_is_flagged_separately_from_a_wrong_one() {
+        // Both fail the verdict, and only one of them is the model's fault. A
+        // reasoning model can spend the entire budget thinking before it writes a
+        // character, so the empty answer says nothing about whether it saw the
+        // image.
+        let cut_off = truncated("");
+        assert!(!saw_the_digit(&cut_off));
+        assert!(cut_off.truncated, "the flag is what tells the two apart");
+
+        let wrong = text("It shows a black square.");
+        assert!(!saw_the_digit(&wrong));
+        assert!(!wrong.truncated);
+    }
+
+    #[test]
+    fn truncation_does_not_override_a_correct_answer() {
+        // A model that named the digit and then ran out of room while elaborating
+        // has passed. The flag is diagnostic, not a veto.
+        assert!(saw_the_digit(&truncated(
+            "The digit shown is 7, and the image is"
+        )));
+    }
+
+    #[test]
+    fn every_probe_uses_the_configured_budget() {
+        // The floor itself is a compile-time assertion next to the constant, so it
+        // cannot be lowered without a build error. What is left to check here is
+        // that probes actually use it rather than setting their own.
+        assert_eq!(
+            ProbeRequest::new("m", "p").max_tokens,
+            crate::llm::provider::PROBE_MAX_TOKENS
+        );
     }
 
     // ---- the tool verdict --------------------------------------------------

@@ -119,6 +119,17 @@ Probe 3 is the one that earns its keep. **Small local models frequently ignore t
 
 Pre-flight uses throwaway inputs only. It never sends real screen contents.
 
+### Budget the probes for thinking, not for the answer
+
+**A tight `max_tokens` on a probe reports the most capable models as the least capable.** Reasoning tokens are generated and billed whether or not the limit accommodates them, so a small limit does not avoid that cost — it truncates the answer the cost was spent producing. A model that thinks for three hundred tokens about a picture of a `7` returns empty `content`, and every verdict reads empty as failure.
+
+Magi hit this with a 256-token probe budget and a reasoning model that advertises vision in its own documentation. The limit that looked frugal was the expensive one.
+
+Two rules follow:
+
+- Size the probe budget for thinking plus a short answer, not for the answer alone (`PROBE_MAX_TOKENS`).
+- Carry the finish reason into the reply. `finish_reason: "length"` in the OpenAI family and `stop_reason: "max_tokens"` in Anthropic's both mean the answer was cut off, and a truncated failure must be distinguishable from a wrong one — they look identical in the verdict, but one is your bug and the other is a model limitation.
+
 ## Local backend quirks worth remembering
 
 | Backend | Quirk |
@@ -126,6 +137,7 @@ Pre-flight uses throwaway inputs only. It never sends real screen contents.
 | Ollama | Base URL is `http://localhost:11434/v1`. Tool support varies sharply by model, not by server version. A model that is not pulled yields a 404 that reads like a bad endpoint |
 | LM Studio | Base URL is `http://localhost:1234/v1`. Server must be started explicitly; a connection refused is the normal state, not an error worth alarming about |
 | OpenRouter | OpenAI-shaped, but capabilities vary per underlying model. Pre-flight per model, never per provider |
+| Xiaomi MiMo | Serves both protocols on one host: `/v1` is OpenAI-shaped, `/anthropic` is Anthropic-shaped. Capabilities differ **per model on the same endpoint** — `mimo-v2.5` (Omni) does images, function calls and structured output; `mimo-v2.5-pro` is text-only and answers an image payload with a 404 whose message is about the model not existing. Thinking is on by default and turned off with `"thinking": {"type": "disabled"}`; the docs use `max_completion_tokens` rather than `max_tokens` |
 
 ## Checklist before committing provider code
 
