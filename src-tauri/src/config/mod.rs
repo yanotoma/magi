@@ -662,4 +662,48 @@ mod tests {
 
         assert_eq!(config, reloaded);
     }
+
+    /// Written after a live `config.toml` turned out to have no `[prompt]` section
+    /// at all, to establish which half of the path was at fault. It was the
+    /// frontend — the save was never requested — but the check belongs here, since
+    /// a context that survives a round trip is the whole point of storing it.
+    #[test]
+    fn a_saved_prompt_context_survives_a_reload() {
+        let dir = tempdir();
+        let mut config = Config::default();
+        config.prompt.context = "I work in Kitchener and prefer metric units.".to_string();
+
+        config.save(dir.path()).expect("save must succeed");
+
+        let written = fs::read_to_string(Config::path_in(dir.path())).expect("readable");
+        assert!(
+            written.contains("[prompt]"),
+            "the section must be written, not omitted as a default:\n{written}"
+        );
+
+        let reloaded = Config::load(dir.path()).expect("load must succeed");
+        assert_eq!(
+            reloaded.prompt.context,
+            "I work in Kitchener and prefer metric units."
+        );
+    }
+
+    #[test]
+    fn a_multiline_prompt_context_survives_a_reload() {
+        // The Settings box is a textarea, so newlines and quotes are ordinary
+        // input. TOML has to escape both, and a naive writer would produce a file
+        // that no longer parses — turning a saved setting into a config the app
+        // falls back to defaults from on next launch.
+        let dir = tempdir();
+        let mut config = Config::default();
+        config.prompt.context = "Line one.\nLine \"two\".\n\tIndented.".to_string();
+
+        config.save(dir.path()).expect("save must succeed");
+        let reloaded = Config::load(dir.path()).expect("load must succeed");
+
+        assert_eq!(
+            reloaded.prompt.context,
+            "Line one.\nLine \"two\".\n\tIndented."
+        );
+    }
 }

@@ -46,6 +46,7 @@
   // unrelated save.
   let promptContext = $state("");
   let contextSaved = $state(false);
+  let contextTimer: ReturnType<typeof setTimeout> | undefined;
 
   // `apiKey` starts undefined and stays that way unless the user types, so
   // editing an endpoint never silently drops a stored credential.
@@ -80,9 +81,11 @@
       .catch((e) => (error = String(e)));
   });
 
-  /** Saves the context on blur, and only when it actually changed. */
-  const saveContext = async () => {
+  /** Writes the context, if it differs from what is stored. */
+  const flushContext = async () => {
+    clearTimeout(contextTimer);
     if (!config || promptContext === config.prompt.context) return;
+
     await run(() => setPromptContext(promptContext));
     if (error) return;
 
@@ -93,23 +96,41 @@
     setTimeout(() => (contextSaved = false), 1800);
   };
 
-  const startCapture = () => {
-    capturing = true;
+  /** Saves shortly after typing stops.
+   *
+   *  This used to save on blur alone, and lost the text every time: the Settings
+   *  window *hides* rather than closes, and a field that still has focus when its
+   *  window disappears is not reliably blurred. So the text was typed, the window
+   *  was closed, and nothing was ever written — with a box that still showed the
+   *  text on reopening, because the box is seeded from a config that never got it.
+   *
+   *  Saving as you type removes the need for any particular closing gesture to
+   *  fire. Blur and window-blur below still flush immediately, so the delay only
+   *  ever costs a moment while typing continues. */
+  const queueContextSave = () => {
+    clearTimeout(contextTimer);
+    contextTimer = setTimeout(flushContext, 600);
+  };
+
+  const toggleCapture = () => {
+    capturing = !capturing;
     error = null;
   };
 
-  const stopCapture = () => {
-    capturing = false;
-  };
-
-  const onCaptureKey = (event: KeyboardEvent) => {
-    // Before capture starts, the button is an ordinary button: Enter and Space
-    // must still activate it, so nothing is intercepted here.
+  /** Handles keys during capture, and is attached to the window rather than to
+   *  the button.
+   *
+   *  On macOS, clicking a `<button>` does not focus it — WebKit deliberately
+   *  leaves focus where it was. A `keydown` handler on the button therefore never
+   *  fires after a click, which is why the first version of this appeared to
+   *  ignore every combination *and* Escape: the handler was never reached at all,
+   *  so no key mapping was involved. The window always receives the event. */
+  const onWindowKeydown = (event: KeyboardEvent) => {
     if (!capturing) return;
 
     // Once capturing, every key belongs to the capture. Without this, Space
-    // re-triggers the button, Tab moves focus away mid-combination, and on macOS
-    // combinations like Cmd+W would close the window instead of being recorded.
+    // scrolls the pane, Tab moves focus, and on macOS Cmd+W would close the
+    // window instead of being recorded.
     event.preventDefault();
     event.stopPropagation();
 
@@ -127,6 +148,16 @@
 
     capturing = false;
     run(() => setHotkey(accelerator));
+  };
+
+  /** The window losing focus ends a capture and commits pending text.
+   *
+   *  Both matter for the same reason: this window is hidden rather than closed, and
+   *  whatever state it was left in is the state it comes back in. A capture left
+   *  armed would swallow the first keystroke of the next visit. */
+  const onWindowBlur = () => {
+    capturing = false;
+    flushContext();
   };
 
   const resetForm = () => {
@@ -210,6 +241,14 @@
     config?.active?.provider === providerId && config?.active?.model === model;
 </script>
 
+<!--
+  Keydown is bound here rather than on the capture button because on macOS a
+  clicked button does not take focus, so a handler on it would never run.
+  Window blur ends a capture and commits any pending context text: this window
+  hides rather than closes, so whatever state it is left in is what comes back.
+-->
+<svelte:window onkeydown={onWindowKeydown} onblur={onWindowBlur} />
+
 <div class="settings">
   <nav>
     <h1>Magi</h1>
@@ -271,7 +310,8 @@
         maxlength={MAX_PROMPT_CONTEXT}
         placeholder="I work in Kitchener, Ontario, mostly in Rust and TypeScript."
         bind:value={promptContext}
-        onblur={saveContext}
+        oninput={queueContextSave}
+        onblur={flushContext}
       ></textarea>
       <p class="hint counter" class:near={promptContext.length > MAX_PROMPT_CONTEXT * 0.9}>
         {promptContext.length} / {MAX_PROMPT_CONTEXT}
@@ -295,14 +335,7 @@
       <h2>Global shortcut</h2>
       <p class="hint">Toggles the panel from anywhere, whatever has focus.</p>
 
-      <button
-        type="button"
-        class="capture"
-        class:listening={capturing}
-        onclick={startCapture}
-        onblur={stopCapture}
-        onkeydown={onCaptureKey}
-      >
+      <button type="button" class="capture" class:listening={capturing} onclick={toggleCapture}>
         {#if capturing}
           <span class="prompt">Press a combination…</span>
         {:else}
@@ -312,8 +345,8 @@
 
       {#if capturing}
         <p class="hint">
-          Hold at least one modifier. <kbd>Esc</kbd> cancels, and nothing changes
-          until a combination is accepted.
+          Hold at least one modifier. <kbd>Esc</kbd> or clicking again cancels, and
+          nothing changes until a combination is accepted.
         </p>
       {:else}
         <p class="hint">
