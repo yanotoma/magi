@@ -21,11 +21,22 @@ pub enum ShellState {
     Degraded,
 }
 
+/// The idle mark, embedded at compile time so the tray cannot fail to find it.
+///
+/// A macOS template image: black with an alpha channel and no colour, so the
+/// system inverts it for light and dark menu bars and highlights it on click.
+/// Regenerate with `python3 tools/generate_tray_icon.py`.
+const ICON_IDLE: &[u8] = include_bytes!("../icons/tray/tray-idle.png");
+
 /// Maps a state to its icon resource name.
 ///
 /// Pure, so it is testable without a display — which matters because CI has
 /// none. Asserting against `TrayIconBuilder` instead would pass whether or not
 /// an icon ever appeared on screen.
+///
+/// Only `tray-idle` has an asset today. `tray-listening` and `tray-thinking`
+/// are generated and waiting for M4 and M6; `tray-degraded` has no design yet
+/// — see the note in `tools/generate_tray_icon.py`.
 pub fn tray_icon_name(state: ShellState) -> &'static str {
     match state {
         ShellState::Idle | ShellState::PanelOpen => "tray-idle",
@@ -62,10 +73,13 @@ pub fn init(app: &tauri::App) -> Result<(), ShellError> {
 
     TrayIconBuilder::with_id("main")
         .icon(
-            app.default_window_icon()
-                .ok_or_else(|| ShellError::Tray("no default window icon bundled".into()))?
-                .clone(),
+            tauri::image::Image::from_bytes(ICON_IDLE)
+                .map_err(|e| ShellError::Tray(format!("tray icon failed to decode: {e}")))?,
         )
+        // Tell macOS this is a template image so it inverts the mark for light
+        // and dark menu bars. Without it the icon is drawn as-is and goes
+        // invisible against a matching background.
+        .icon_as_template(true)
         .menu(&menu)
         // Left click toggles the panel, so the menu belongs on right click only.
         .show_menu_on_left_click(false)

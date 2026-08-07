@@ -5,7 +5,7 @@ Complete breakdown of what is done and what is pending, across every milestone.
 **Last updated:** 2026-08-06
 **Current phase:** M1 shipped as `0.1.0-alpha.1`; M2 next
 **Current version:** `0.1.0-alpha.1` (unreleased — see [VERSIONING.md](VERSIONING.md))
-**Overall:** 30 / 130 tasks done (23%)
+**Overall:** 30 / 134 tasks done (22%)
 
 Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 
@@ -17,13 +17,13 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 |---|---|---|---:|---:|---|
 | **M0** | Foundations | — | 15 | 15 | ✅ Complete |
 | **M1** | Shell — tray, hotkey, windows | `0.1.0-alpha.1` | 15 | 16 | ✅ Shipped |
-| **M2** | Config & providers | `0.2.0-alpha.1` | 0 | 17 | ⬜ |
-| **M3** | Pre-flight & capability tiers | `0.2.0-alpha.1` | 0 | 11 | ⬜ |
+| **M2** | Config & providers | `0.2.0-alpha.1` | 0 | 18 | ⬜ |
+| **M3** | Pre-flight & capability tiers | `0.2.0-alpha.1` | 0 | 14 | ⬜ |
 | **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 0 | 14 | ⬜ |
 | **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 0 | 13 | ⬜ |
-| **M6** | Session machine & panel UX | `0.5.0-beta.1` | 0 | 15 | ⬜ |
-| **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 15 | ⬜ |
-| — | **v1 total** | `1.0.0` | **30** | **116** | |
+| **M6** | Session machine & panel UX | `0.5.0-beta.1` | 0 | 16 | ⬜ |
+| **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 14 | ⬜ |
+| — | **v1 total** | `1.0.0` | **30** | **120** | |
 | **M8** | v2 — wake word & TTS | `1.1.0` | 0 | 9 | 🔮 Post-v1 |
 | **M9** | v3 — computer use | `1.2.0` | 0 | 5 | 🔮 Post-v1 |
 
@@ -68,7 +68,7 @@ One task is carried into M3/M4/M6 rather than done here — see the note on the 
 **Tray**
 - [x] `tray.rs` — tray icon with menu (Open, Settings, Quit) using `TrayIconBuilder`
 - [x] Left click opens the panel; right click opens the menu
-- [ ] Tray icon reflects session state (idle / listening / thinking) and capability tier — the state-to-icon mapping is written and unit-tested; the icon assets and live updating are not, and the states it maps do not exist until M3/M4/M6
+- [ ] Tray icon reflects session state (idle / listening / thinking) and capability tier — the mark, the generator, and the state-to-icon mapping exist and are tested; live updating waits for the states themselves, which arrive in M3/M4/M6
 - [x] macOS: set activation policy to `Accessory` so no Dock icon appears
 
 **Hotkey**
@@ -102,6 +102,7 @@ One task is carried into M3/M4/M6 rather than done here — see the note on the 
 - [ ] `FakeProvider` for tests, replaying scripted turns including tool calls
 - [ ] Settings UI — provider list with add / edit / remove
 - [ ] Settings UI — hotkey capture control
+- [ ] `[prompt] context` in `config.toml` — free text appended to Magi's system prompt. **Additive, never a replacement**: Magi's own instructions carry the contract that makes agentic capture fire, and letting a user overwrite them breaks tier 1 silently
 
 ---
 
@@ -118,6 +119,9 @@ One task is carried into M3/M4/M6 rather than done here — see the note on the 
 - [ ] Settings UI — capability matrix per provider
 - [ ] Settings UI — *Re-test* button with progress
 - [ ] Surface the active tier in the tray tooltip
+- [ ] `llm::prompt` — assemble messages from `(tier, config, history)` rather than from a constant. The prompt is tier-dependent: tier 1 needs instructions on when to call `capture_screen`; tier 2 must not be told about tools at all, since the harness captures ahead of it by heuristic and mentioning tools only invites malformed tool syntax in prose; tier 3 needs to know it cannot see the screen so it stops promising to look
+- [ ] Unit tests for prompt assembly per tier — pure logic, no network
+- [ ] Design the degraded tray icon. A cancel slash across three separated nodes does not read at 22pt — the mark is discontinuous, so the bar alternates between empty space and ring and every crossing forces a choice between eating the ring and breaking the bar. Needs a different idea, looked at in a real menu bar
 
 ---
 
@@ -181,6 +185,7 @@ One task is carried into M3/M4/M6 rather than done here — see the note on the 
 - [ ] Panel — Esc dismisses; click-outside behavior
 - [ ] Panel — inline error surfaces per failure class
 - [ ] Panel — markdown and code-block rendering with syntax highlighting
+- [ ] Prompt templates: pre-written user prompts bound to a trigger ("explain this error", "summarise this screen"). Distinct from the system prompt — these are user turns, not instructions, and they belong in the panel UI rather than in the prompt assembler
 
 ---
 
@@ -259,7 +264,9 @@ Recorded so they are not re-proposed.
 
 ## Cross-cutting, ongoing
 
-- [ ] CI: `cargo test`, `cargo clippy -D warnings`, `cargo fmt --check`, `svelte-check`
+- [x] CI: `cargo test`, `cargo clippy -D warnings`, `cargo fmt --check`, `svelte-check`
+- [ ] Consider extracting a `magi-core` crate with no Tauri dependency. Magi's interesting logic — config parsing and migration, tier assignment, prompt assembly, deictic detection, token-stream parsing — touches no platform API, but it currently lives in a crate that depends on `tauri`, so testing it drags in a whole platform. A core crate would let those tests run anywhere in seconds and would make the cross-platform claim structural rather than aspirational. Not worth it at M1's 300 lines of logic; revisit when `llm/`, `config/`, and `session/` land in M2
+- [x] Split CI by what actually needs macOS. Everything currently runs on `macos-14`, but `cargo fmt`, `svelte-check`, and the task-count check are platform-independent — and macOS runners bill at a 10x minute multiplier and are markedly harder to get allocated (observed: two consecutive runs lost, one to a service outage and one to "job was not acquired by Runner of type hosted"). Move the platform-independent checks to `ubuntu-latest` and leave macOS for the build. Caveat: `cargo test` on Linux needs Tauri's webkit2gtk system dependencies, which is real work rather than a config line — but it would also prove the cross-platform claim is not vapour
 - [ ] Keep all tests free of GPU, microphone, display, and network dependencies
 - [ ] Windows packaging
 - [ ] Linux packaging

@@ -25,7 +25,12 @@
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "center": true,
-        "shadow": false
+        "shadow": false,
+        "windowEffects": {
+          "effects": ["hudWindow"],
+          "radius": 14,
+          "state": "active"
+        }
       },
       {
         "label": "settings",
