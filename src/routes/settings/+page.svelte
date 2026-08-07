@@ -58,15 +58,53 @@
   let contextSaved = $state(false);
   let contextTimer: ReturnType<typeof setTimeout> | undefined;
 
+  /** Whether the add/edit form is on screen.
+   *
+   *  The form used to be permanently visible below the provider list, which made an
+   *  empty "Add a provider" section the largest thing on the screen even when the
+   *  user only came to switch models. */
+  let formOpen = $state(false);
+
   // `apiKey` starts undefined and stays that way unless the user types, so
   // editing an endpoint never silently drops a stored credential.
   let form = $state({
     id: "",
     kind: "openai-compatible" as ProviderKind,
     base_url: "",
-    models: "",
     requires_key: false,
     apiKey: undefined as string | undefined,
+  });
+
+  /** Every model name known for the provider being edited.
+   *
+   *  Starts as whatever is already saved and grows when the endpoint is asked. Not
+   *  persisted: the catalogue is a working list for the form, and only the chosen
+   *  subset is written to the config. */
+  let catalog = $state<string[]>([]);
+
+  /** The subset the user wants Magi to offer.
+   *
+   *  Separate from the catalogue because those are different questions — "what does
+   *  this endpoint serve" and "what do I want to see". OpenRouter serves hundreds;
+   *  listing all of them in the provider card and the capability matrix would bury
+   *  the two or three anyone actually uses. */
+  let chosen = $state<Set<string>>(new Set());
+
+  let modelSearch = $state("");
+  let selectedOnly = $state(false);
+
+  /** The catalogue as the picker shows it: filtered, and in stable order.
+   *
+   *  Alphabetical rather than selected-first, deliberately. Sorting by selection
+   *  would make rows jump under the cursor as they are ticked, which is the one thing
+   *  a list of three hundred checkboxes must not do. The count and the "Selected
+   *  only" filter are how you review a selection instead. */
+  const visibleModels = $derived.by(() => {
+    const needle = modelSearch.trim().toLowerCase();
+    return catalog.filter((model) => {
+      if (selectedOnly && !chosen.has(model)) return false;
+      return needle === "" || model.toLowerCase().includes(needle);
+    });
   });
 
   const run = async (action: () => Promise<ConfigView>) => {
@@ -249,14 +287,52 @@
   const resetForm = () => {
     editing = null;
     discovered = null;
+    catalog = [];
+    chosen = new Set();
+    modelSearch = "";
+    selectedOnly = false;
     form = {
       id: "",
       kind: "openai-compatible",
       base_url: "",
-      models: "",
       requires_key: false,
       apiKey: undefined,
     };
+  };
+
+  /** Opens a blank form for a new provider. */
+  const addProvider = () => {
+    resetForm();
+    formOpen = true;
+  };
+
+  const closeForm = () => {
+    formOpen = false;
+    resetForm();
+  };
+
+  const toggleModel = (model: string) => {
+    const next = new Set(chosen);
+    if (next.has(model)) next.delete(model);
+    else next.add(model);
+    chosen = next;
+  };
+
+  /** Selects everything currently shown, which is what makes search useful.
+   *
+   *  Scoped to the visible rows rather than the whole catalogue on purpose: with a
+   *  search active, "select all shown" is the point — filter to `gpt-5`, take the
+   *  matches. Without one it selects everything, and the count says so. */
+  const selectShown = () => {
+    const next = new Set(chosen);
+    for (const model of visibleModels) next.add(model);
+    chosen = next;
+  };
+
+  const clearShown = () => {
+    const next = new Set(chosen);
+    for (const model of visibleModels) next.delete(model);
+    chosen = next;
   };
 
   const applyPreset = (label: string) => {
@@ -271,11 +347,17 @@
   const edit = (provider: ProviderView) => {
     editing = provider.id;
     discovered = null;
+    modelSearch = "";
+    selectedOnly = false;
+    // The saved models seed both lists: they are what is known and what is chosen.
+    // Editing a provider without asking the endpoint again still shows the current
+    // selection, so a URL can be corrected without losing it.
+    catalog = [...provider.models].sort();
+    chosen = new Set(provider.models);
     form = {
       id: provider.id,
       kind: provider.kind,
       base_url: provider.base_url,
-      models: provider.models.join("\n"),
       requires_key: provider.requires_key,
       apiKey: undefined,
     };
@@ -285,17 +367,16 @@
     id: form.id.trim(),
     kind: form.kind,
     base_url: form.base_url.trim(),
-    models: form.models
-      .split("\n")
-      .map((m) => m.trim())
-      .filter(Boolean),
+    // Sorted so the saved order does not depend on the order things were clicked,
+    // which would otherwise show up as noise in a config.toml diff.
+    models: [...chosen].sort(),
     requires_key: form.requires_key,
   });
 
   const submit = async (event: Event) => {
     event.preventDefault();
     await run(() => saveProvider(formAsProvider(), form.apiKey));
-    if (!error) resetForm();
+    if (!error) closeForm();
   };
 
   const discover = async () => {
@@ -308,10 +389,20 @@
         // An empty list is a valid answer, not a failure — a fresh Ollama with
         // nothing pulled replies exactly this. Saying so beats an empty box.
         discovered = "The endpoint answered, but serves no models yet.";
-      } else {
-        form.models = models.join("\n");
-        discovered = `Found ${models.length} model${models.length === 1 ? "" : "s"}.`;
+        return;
       }
+
+      // Merged into the catalogue, and nothing is selected automatically. That is
+      // the whole change: on OpenRouter this call returns hundreds, and selecting
+      // them all would put hundreds of rows in the provider card and offer hundreds
+      // of models nobody asked for. The user picks.
+      const merged = new Set([...catalog, ...models]);
+      catalog = [...merged].sort();
+
+      const fresh = models.filter((model) => !chosen.has(model)).length;
+      discovered =
+        `The endpoint serves ${models.length} model${models.length === 1 ? "" : "s"}` +
+        (fresh > 0 ? `. Choose the ones you want below.` : `, all already chosen.`);
     } catch (e) {
       error = String(e);
     } finally {
@@ -443,7 +534,22 @@
     {/if}
 
     {#if pane === "models"}
-      <h2>Providers</h2>
+      <div class="section-head">
+        <h2>Providers</h2>
+        {#if !formOpen}
+          <button type="button" class="primary" onclick={addProvider}>Add a provider</button>
+        {/if}
+      </div>
+
+      <!--
+        The form renders above the list rather than below it. It is the active task
+        when it is open, and putting it after a list of providers means clicking Edit
+        scrolls the thing you are editing off screen.
+      -->
+      {#if formOpen}
+        {@render providerForm()}
+      {/if}
+
       {#if !config || config.providers.length === 0}
         <p class="empty">No providers yet. Ollama needs no key and no account.</p>
       {:else}
@@ -473,7 +579,7 @@
               </div>
 
               {#if provider.models.length === 0}
-                <p class="hint">No models yet — edit and fetch them.</p>
+                <p class="hint">No models chosen yet — press Edit, fetch them, and pick the ones you want.</p>
               {:else}
                 <table class="matrix">
                   <thead>
@@ -571,93 +677,155 @@
         </ul>
       {/if}
 
-      <h2 class="spaced">{editing ? `Edit ${editing}` : "Add a provider"}</h2>
-
-      <form onsubmit={submit}>
-        {#if !editing}
-          <label>
-            Start from
-            <select onchange={(e) => applyPreset(e.currentTarget.value)}>
-              <option value="">Custom endpoint…</option>
-              {#each PRESETS as preset (preset.id)}
-                <option value={preset.label}>{preset.label}</option>
-              {/each}
-            </select>
-          </label>
-        {/if}
-
-        <label>
-          Name
-          <input bind:value={form.id} placeholder="ollama" required readonly={!!editing} />
-        </label>
-
-        <label>
-          Protocol
-          <select bind:value={form.kind}>
-            <option value="openai-compatible">OpenAI-compatible</option>
-            <option value="anthropic">Anthropic</option>
-          </select>
-        </label>
-
-        <label>
-          Endpoint
-          <input bind:value={form.base_url} placeholder="http://localhost:11434/v1" required />
-        </label>
-
-        <label>
-          <span class="label-row">
-            <span>Models <span class="hint-inline">one per line</span></span>
-            <button
-              type="button"
-              onclick={discover}
-              disabled={discovering || !form.base_url.trim()}
-            >
-              {discovering ? "Asking…" : "Fetch from endpoint"}
-            </button>
-          </span>
-          <textarea bind:value={form.models} rows="4" placeholder="qwen2.5-vl:7b"></textarea>
-          {#if discovered}
-            <span class="hint-inline">{discovered}</span>
-          {/if}
-        </label>
-
-        <label class="checkbox">
-          <input type="checkbox" bind:checked={form.requires_key} />
-          This endpoint needs an API key
-        </label>
-
-        {#if form.requires_key}
-          <label>
-            API key
-            <input
-              type="password"
-              value={form.apiKey ?? ""}
-              oninput={(e) => (form.apiKey = e.currentTarget.value)}
-              placeholder={editingProvider?.key_hint ?? "sk-…"}
-              autocomplete="off"
-            />
-            <span class="hint-inline">
-              {#if editingProvider?.key_hint}
-                Stored key: <code>{editingProvider.key_hint}</code>. Leave blank to keep it.
-              {:else}
-                Stored in the macOS keychain, never in config.toml.
-              {/if}
-            </span>
-          </label>
-        {/if}
-
-        <div class="form-actions">
-          <button type="submit" class="primary">
-            {editing ? "Save changes" : "Add provider"}
-          </button>
-          {#if editing}
-            <button type="button" onclick={resetForm}>Cancel</button>
-          {/if}
-        </div>
-      </form>
     {/if}
   </main>
 </div>
+
+{#snippet providerForm()}
+  <form class="provider-form" onsubmit={submit}>
+    <h3>{editing ? `Edit ${editing}` : "New provider"}</h3>
+
+    {#if !editing}
+      <label>
+        Start from
+        <select onchange={(e) => applyPreset(e.currentTarget.value)}>
+          <option value="">Custom endpoint…</option>
+          {#each PRESETS as preset (preset.id)}
+            <option value={preset.label}>{preset.label}</option>
+          {/each}
+        </select>
+      </label>
+    {/if}
+
+    <label>
+      Name
+      <input bind:value={form.id} placeholder="ollama" required readonly={!!editing} />
+    </label>
+
+    <label>
+      Protocol
+      <select bind:value={form.kind}>
+        <option value="openai-compatible">OpenAI-compatible</option>
+        <option value="anthropic">Anthropic</option>
+      </select>
+    </label>
+
+    <label>
+      Endpoint
+      <input bind:value={form.base_url} placeholder="http://localhost:11434/v1" required />
+    </label>
+
+    <label class="checkbox">
+      <input type="checkbox" bind:checked={form.requires_key} />
+      This endpoint needs an API key
+    </label>
+
+    {#if form.requires_key}
+      <label>
+        API key
+        <input
+          type="password"
+          value={form.apiKey ?? ""}
+          oninput={(e) => (form.apiKey = e.currentTarget.value)}
+          placeholder={editingProvider?.key_hint ?? "sk-…"}
+          autocomplete="off"
+        />
+        <span class="hint-inline">
+          {#if editingProvider?.key_hint}
+            Stored key: <code>{editingProvider.key_hint}</code>. Leave blank to keep it.
+          {:else}
+            Stored in the macOS keychain, never in config.toml.
+          {/if}
+        </span>
+      </label>
+    {/if}
+
+    <!--
+      The model picker. The key change from the first version: asking the endpoint
+      no longer selects everything it returns. OpenRouter answers with hundreds, and
+      taking all of them would fill the provider card and the capability matrix with
+      models nobody asked for — and offer them all as choices in the panel.
+    -->
+    <div class="picker">
+      <div class="picker-head">
+        <span>
+          Models
+          <span class="hint-inline">
+            {chosen.size} chosen{catalog.length > 0 ? ` of ${catalog.length} known` : ""}
+          </span>
+        </span>
+        <button
+          type="button"
+          onclick={discover}
+          disabled={discovering || !form.base_url.trim()}
+        >
+          {discovering ? "Asking…" : "Fetch from endpoint"}
+        </button>
+      </div>
+
+      {#if discovered}
+        <p class="hint">{discovered}</p>
+      {/if}
+
+      {#if catalog.length === 0}
+        <p class="hint">
+          No models known yet. Fetch them from the endpoint, and then choose the ones
+          you want Magi to offer.
+        </p>
+      {:else}
+        <!-- The search exists for OpenRouter and AI Studio, where the list runs to
+             hundreds and scrolling is not a way to find anything. -->
+        <div class="picker-tools">
+          <input
+            class="search"
+            type="search"
+            bind:value={modelSearch}
+            placeholder="Search {catalog.length} models…"
+          />
+          <label class="checkbox tight">
+            <input type="checkbox" bind:checked={selectedOnly} />
+            Selected only
+          </label>
+        </div>
+
+        <div class="picker-bulk">
+          <button type="button" class="link" onclick={selectShown} disabled={visibleModels.length === 0}>
+            Select {visibleModels.length === catalog.length ? "all" : `these ${visibleModels.length}`}
+          </button>
+          <button type="button" class="link" onclick={clearShown} disabled={visibleModels.length === 0}>
+            Clear
+          </button>
+        </div>
+
+        {#if visibleModels.length === 0}
+          <p class="hint">Nothing matches.</p>
+        {:else}
+          <ul class="model-list">
+            {#each visibleModels as model (model)}
+              <li>
+                <label class="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={chosen.has(model)}
+                    onchange={() => toggleModel(model)}
+                  />
+                  <span class="model-name">{model}</span>
+                </label>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      {/if}
+    </div>
+
+    <div class="form-actions">
+      <button type="submit" class="primary">
+        {editing ? "Save changes" : "Add provider"}
+      </button>
+      <button type="button" onclick={closeForm}>Cancel</button>
+    </div>
+  </form>
+{/snippet}
 
 <style>
   .settings {
@@ -850,13 +1018,6 @@
     gap: 7px;
   }
 
-  .label-row {
-    align-items: center;
-    display: flex;
-    gap: 10px;
-    justify-content: space-between;
-  }
-
   input,
   select,
   textarea {
@@ -960,6 +1121,111 @@
 
   .saved {
     color: AccentColor;
+  }
+
+  .section-head {
+    align-items: center;
+    display: flex;
+    justify-content: space-between;
+  }
+
+  .section-head h2 {
+    margin: 0;
+  }
+
+  /* The form reads as a card so it is visibly a separate task from the list of
+     providers below it, rather than more of the same page. */
+  .provider-form {
+    background: color-mix(in srgb, Canvas 94%, CanvasText 6%);
+    border: 1px solid color-mix(in srgb, Canvas 80%, CanvasText 20%);
+    border-radius: 8px;
+    margin: 12px 0 4px;
+    padding: 12px 14px;
+  }
+
+  .provider-form h3 {
+    font-size: 12px;
+    margin: 0 0 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    opacity: 0.6;
+  }
+
+  .picker {
+    margin-top: 10px;
+  }
+
+  .picker-head {
+    align-items: center;
+    display: flex;
+    gap: 8px;
+    justify-content: space-between;
+  }
+
+  .picker-tools {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 8px;
+  }
+
+  .search {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .checkbox.tight {
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  .picker-bulk {
+    display: flex;
+    gap: 12px;
+    margin-top: 6px;
+  }
+
+  /* Text buttons: these are shortcuts, not the actions the form is for, and giving
+     them the same weight as Save would misrepresent what matters here. */
+  .link {
+    background: none;
+    border: none;
+    color: AccentColor;
+    font-size: 11px;
+    padding: 0;
+  }
+
+  .link:hover:not(:disabled) {
+    background: none;
+    text-decoration: underline;
+  }
+
+  /* Capped and scrolling. A provider that serves three hundred models must not make
+     the settings window three hundred rows tall. */
+  .model-list {
+    border: 1px solid color-mix(in srgb, Canvas 82%, CanvasText 18%);
+    border-radius: 5px;
+    list-style: none;
+    margin: 8px 0 0;
+    max-height: 15em;
+    overflow-y: auto;
+    padding: 4px 0;
+  }
+
+  .model-list li {
+    padding: 1px 8px;
+  }
+
+  .model-list li:hover {
+    background: color-mix(in srgb, Canvas 90%, CanvasText 10%);
+  }
+
+  .model-name {
+    font-family: ui-monospace, monospace;
+    font-size: 11px;
+    /* A long model id wraps rather than stretching the card sideways — OpenRouter
+       ids like "meta-llama/llama-3.3-70b-instruct:free" are routinely this long. */
+    overflow-wrap: anywhere;
   }
 
   /* The capability matrix. A table because it is one: models down, capabilities
