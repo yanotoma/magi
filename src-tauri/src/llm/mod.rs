@@ -5,6 +5,9 @@
 //! specification, and Anthropic sits outside it — see
 //! `.claude/skills/llm-providers/SKILL.md`.
 
+pub mod anthropic;
 pub mod discovery;
+pub mod openai;
 pub mod provider;
+pub mod registry;
 pub mod sse;

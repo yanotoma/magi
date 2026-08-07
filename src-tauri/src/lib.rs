@@ -71,6 +71,8 @@ pub fn run() {
                 config: Mutex::new(config),
                 config_dir,
                 secrets: Box::new(KeyringStore),
+                key_hints: Mutex::new(std::collections::HashMap::new()),
+                in_flight: Mutex::new(None),
             });
 
             commands::apply_theme(app.handle(), theme);
@@ -93,6 +95,8 @@ pub fn run() {
             commands::set_active_model,
             commands::discover_models,
             commands::set_theme,
+            commands::send_text_turn,
+            commands::cancel_turn,
         ])
         .on_window_event(|window, event| {
             // Closing a window must never quit a tray app. Hide instead, and let

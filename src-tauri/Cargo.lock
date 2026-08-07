@@ -1828,6 +1828,7 @@ name = "magi"
 version = "0.1.0-alpha.1"
 dependencies = [
  "async-trait",
+ "futures-util",
  "keyring",
  "reqwest 0.12.28",
  "serde",

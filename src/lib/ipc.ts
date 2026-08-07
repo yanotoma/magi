@@ -5,6 +5,7 @@
 // here instead of failing at runtime in whichever component happened to call it.
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export type ProviderKind = "openai-compatible" | "anthropic";
 
@@ -157,3 +158,34 @@ export const PRESETS: ReadonlyArray<{
     models: [],
   },
 ];
+
+/** One history entry, as the backend expects it. */
+export type TurnMessage = { role: string; content: string };
+
+/**
+ * Starts a turn. Returns as soon as the request is under way — the reply arrives
+ * through the listeners below, so the panel is never blocked waiting for a model.
+ */
+export const sendTextTurn = async (text: string, history: TurnMessage[]): Promise<void> =>
+  invoke("send_text_turn", { text, history });
+
+export const cancelTurn = async (): Promise<void> => invoke("cancel_turn");
+
+/**
+ * Subscribes to a turn's events and returns a single teardown function.
+ *
+ * Bundled rather than exposed one at a time so a component cannot unsubscribe
+ * from two of the three and leak the other.
+ */
+export const onTurnEvents = async (handlers: {
+  token: (token: string) => void;
+  done: (notice: string | null) => void;
+  error: (message: string) => void;
+}): Promise<UnlistenFn> => {
+  const unlisten = await Promise.all([
+    listen<string>("magi://token", (e) => handlers.token(e.payload)),
+    listen<string | null>("magi://turn-done", (e) => handlers.done(e.payload)),
+    listen<string>("magi://error", (e) => handlers.error(e.payload)),
+  ]);
+  return () => unlisten.forEach((off) => off());
+};
