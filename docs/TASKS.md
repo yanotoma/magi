@@ -5,7 +5,7 @@ Complete breakdown of what is done and what is pending, across every milestone.
 **Last updated:** 2026-08-07
 **Current phase:** M4 — audio and speech-to-text, targeting `0.3.0-alpha.1`
 **Current version:** `0.2.0-alpha.2` (released — see [VERSIONING.md](VERSIONING.md))
-**Overall:** 78 / 144 tasks done (54%)
+**Overall:** 82 / 144 tasks done (57%)
 
 Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 
@@ -19,11 +19,11 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 | **M1** | Shell — tray, hotkey, windows | `0.1.0-alpha.1` | 15 | 16 | ✅ Shipped |
 | **M2** | Config & providers | `0.2.0-alpha.1` | 28 | 28 | ✅ Shipped |
 | **M3** | Pre-flight & capability tiers | `0.2.0-alpha.2` | 13 | 14 | ✅ Shipped |
-| **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 7 | 14 | 🔨 Next |
+| **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 11 | 14 | 🔨 Next |
 | **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 0 | 13 | ⬜ |
 | **M6** | Session machine & panel UX | `0.5.0-beta.1` | 0 | 16 | ⬜ |
 | **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 14 | ⬜ |
-| — | **v1 total** | `1.0.0` | **78** | **130** | |
+| — | **v1 total** | `1.0.0` | **82** | **130** | |
 | **M8** | v2 — wake word & TTS | `1.1.0` | 0 | 9 | 🔮 Post-v1 |
 | **M9** | v3 — computer use | `1.2.0` | 0 | 5 | 🔮 Post-v1 |
 
@@ -165,12 +165,12 @@ Two bugs the milestone only surfaced when run, both worth remembering:
 - [x] Handle device disconnect mid-recording. Flagged from the error callback and read on stop, so unplugging a microphone mid-sentence returns the sentence. `ErrorKind::Xrun` is deliberately not treated as a disconnection: it is a dropout on a stream that is still alive
 
 **Transcription**
-- [ ] `stt` module — `whisper-rs` integration
-- [ ] Verify the cmake build works on Apple Silicon and Intel
-- [ ] Enable Metal acceleration on macOS
+- [x] `stt` module — `whisper-rs` integration. Written against the 0.16 source, whose segment API is an iterator of `WhisperSegment` rather than the `full_get_segment_text(i)` that documentation still shows
+- [x] Verify the cmake build works on Apple Silicon (whisper.cpp compiles in about two minutes; `.cargo/config.toml` links `libc++` and Accelerate). Intel is untested — no machine to try it on, and the same flags are configured for `x86_64-apple-darwin`
+- [x] Enable Metal acceleration on macOS, target-gated so the Linux CI job compiles whisper.cpp without it. Feature-gating the whole crate to keep `cargo test` free of cmake was rejected: a build that compiles the real transcriber only when someone remembers a flag is one where it is usually not compiled
 - [ ] First-run model download with progress, resumable, checksum-verified
 - [ ] Model selection in Settings (`base.en` default, `small`, `medium`)
-- [ ] Run inference on `spawn_blocking` — it is CPU-bound and long
+- [x] `Transcriber::transcribe` is synchronous so the `spawn_blocking` obligation is explicit at the call site; inference uses half the cores rather than all of them, since Magi transcribes while the user is still working
 - [x] `Transcriber` trait plus a fake. Synchronous on purpose — inference is CPU-bound for seconds, so making it `async` would suggest it yields when it would in fact occupy a runtime thread throughout. Rejects Whisper's known silence artefacts ("Thank you.", "[BLANK_AUDIO]"), matched on the whole string so a real question containing a polite phrase survives
 - [ ] Microphone permission request and denial handling
 

@@ -60,9 +60,29 @@ params.set_print_realtime(false);
 params.set_print_timestamps(false);
 ```
 
-Segment timestamps from `full_get_segment_t0`/`t1` are in **centiseconds**, not milliseconds. Divide by 100 for seconds.
+### The segment API in 0.16 is not the one in the examples
 
-Prefer `full_get_segment_text_lossy` over `full_get_segment_text` when the text goes straight to the UI: the strict version returns an error on invalid UTF-8, and losing a whole transcription to one bad byte is worse than a replacement character.
+Most documentation — including what a docs search returns — shows `state.full_n_segments()` with `full_get_segment_text(i)`, `full_get_segment_t0(i)`, `full_get_segment_t1(i)`. That shape is older. In 0.16 it is:
+
+```rust
+for segment in state.as_iter() {
+    let text = segment.to_str_lossy()?;          // Cow<str>
+    let start = segment.start_timestamp();        // centiseconds
+    let confidence = segment.no_speech_probability();
+}
+```
+
+Timestamps are **centiseconds**, not milliseconds. Divide by 100.
+
+Prefer `to_str_lossy` over `to_str` when the text goes to the UI: the strict version fails on invalid UTF-8, and losing a whole sentence to one bad byte is the wrong trade against a replacement character.
+
+### Use `no_speech_probability`, not a list of hallucinations
+
+`segment.no_speech_probability()` is whisper.cpp's own per-segment judgement that a passage is not speech. It is a far better silence filter than matching output against known hallucinations — numeric, from the model, and language-independent, where a string list is English-only and needs maintaining as the model changes.
+
+Keep a string list as a backstop for artefacts that arrive with a confident probability, but make this the primary signal. `params.set_no_speech_thold()` sets the threshold whisper.cpp itself uses; its default is `0.6`.
+
+Also worth setting: `set_suppress_blank(true)` and `set_suppress_nst(true)`, which stop the blank and non-speech tokens at the source instead of filtering them afterwards.
 
 ## Building
 
