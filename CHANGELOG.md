@@ -6,6 +6,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Changed
+- macOS 11 (Big Sur) is now the minimum. The speech engine needs a newer system library than Tauri's default of macOS 10.13 allowed, and 11 is the first release that runs on Apple Silicon — which is what Magi is built and tested for
+
 ## [0.2.0-alpha.2] - 2026-08-07
 
 Magi now checks what a model can do before relying on it.
