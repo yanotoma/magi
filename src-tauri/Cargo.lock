@@ -2028,6 +2028,7 @@ dependencies = [
  "futures-util",
  "hound",
  "keyring",
+ "objc2-av-foundation",
  "png 0.17.16",
  "reqwest 0.12.28",
  "serde",
@@ -2283,6 +2284,17 @@ dependencies = [
  "objc2-core-audio",
  "objc2-core-audio-types",
  "objc2-core-foundation",
+ "objc2-foundation",
+]
+
+[[package]]
+name = "objc2-av-foundation"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "478ae33fcac9df0a18db8302387c666b8ef08a3e2d62b510ca4fc278a384b6c0"
+dependencies = [
+ "bitflags 2.13.1",
+ "objc2",
  "objc2-foundation",
 ]
 

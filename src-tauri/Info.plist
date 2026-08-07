@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Merged with the Info.plist the Tauri CLI generates, so this file carries only the
+  keys Tauri does not know about. Deliberately nothing else: overwriting a value
+  Tauri computes — the version, the bundle identifier — introduces conflicts that
+  show up as a bundle that will not launch.
+
+  A usage description is not a formality. Without NSMicrophoneUsageDescription the
+  process is terminated the moment it touches the microphone: no exception, no log
+  line, and for a tray app with no window, nothing at all on screen. The app simply
+  disappears.
+
+  The strings are user-visible — they are the entire text of the system dialog, and
+  the only chance to say why before someone decides. Written for that person, not to
+  satisfy a linter.
+-->
+<plist version="1.0">
+<dict>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Magi records only while you hold its hotkey, and transcribes what you said on this Mac. No audio ever leaves your computer.</string>
+</dict>
+</plist>

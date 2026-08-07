@@ -82,6 +82,18 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # whisper.cpp without it — slower on a cold cache, and correct.
 [target.'cfg(target_os = "macos")'.dependencies]
 whisper-rs = { version = "0.16", features = ["metal"] }
+# Reads microphone authorisation without triggering the prompt, so Settings can show
+# the current state rather than "we will find out when you try". Version 0.3 matches
+# the objc2 family Tauri and cpal already pull in. Only the two features that are
+# used: the crate covers all of AVFoundation otherwise.
+#
+# The alternative was hand-rolled `msg_send!` against AVCaptureDevice, which is a
+# selector name and a return type to get subtly wrong in `unsafe` code — the typed
+# binding costs one dependency from a family already present.
+objc2-av-foundation = { version = "0.3", default-features = false, features = [
+  "AVCaptureDevice",
+  "AVMediaFormat",
+] }
 
 [dev-dependencies]
 # #[tokio::test] needs a runtime the library itself does not pull in.

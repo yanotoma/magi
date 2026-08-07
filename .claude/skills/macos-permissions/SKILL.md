@@ -30,6 +30,17 @@ Accessibility has a similar shape: some APIs prompt, others just fail silently. 
 
 **Request lazily, at first genuine use.** Prompting for three permissions on first launch reads as invasive for an app that is supposed to be privacy-first, and the user has no context for why any of them are needed. Ask when the feature is first used, with the reason visible.
 
+**Read the state, do not infer it.** `AVCaptureDevice.authorizationStatusForMediaType` answers without prompting, so Settings can show what is true instead of finding out when a feature quietly fails. In Rust that is `objc2-av-foundation` — the objc2 family is already in the tree via Tauri and cpal, so it costs one aligned dependency, against hand-rolled `msg_send!` where a wrong selector or return type is undefined behaviour in `unsafe` code.
+
+The state has **four** values, not two, and collapsing them misleads:
+
+| State | Why it is distinct |
+|---|---|
+| `NotDetermined` | Never asked. The **intended** first-run path, not a failure — wording it as one has every new user believing something is broken before they have done anything |
+| `Authorized` | Working |
+| `Denied` | Only the user can change it, in System Settings. Say so, **and** that Magi must be reopened: macOS does not re-check a permission for a running process, so granting it and carrying on looks like the grant did nothing |
+| `Restricted` | A configuration profile on a managed Mac. Pointing at System Settings here sends someone to a toggle they cannot move |
+
 **Every permission gets a live status row in Settings**, with current state and a button that opens the correct System Settings pane:
 
 ```

@@ -10,6 +10,7 @@ pub mod config;
 pub mod error;
 pub mod hotkey;
 pub mod llm;
+pub mod permissions;
 pub mod stt;
 pub mod tray;
 pub mod windows;
