@@ -1,6 +1,8 @@
 <script lang="ts">
   import { getCurrentWindow } from "@tauri-apps/api/window";
+  import MagiSpinner from "$lib/MagiSpinner.svelte";
   import { cancelTurn, getConfig, onTurnEvents, sendTextTurn } from "$lib/ipc";
+  import { renderMarkdown } from "$lib/markdown";
   import {
     appendThinking,
     appendToken,
@@ -110,9 +112,7 @@
   The blur behind this panel is drawn by macOS, not CSS. `backdrop-filter` blurs
   what is behind the element *within the page*, and the webview cannot see the
   desktop — the OS composites that outside the renderer. So the panel declares
-  `windowEffects` in tauri.conf.json and stays translucent to let it through. The
-  corner radius lives there too, or the OS material would stay square behind
-  rounded content.
+  `windowEffects` in tauri.conf.json and stays translucent to let it through.
 -->
 <div class="panel">
   <header data-tauri-drag-region>
@@ -134,7 +134,16 @@
               <p class="reasoning">{turn.thinking}</p>
             {/if}
           {/if}
-          <p class="content">{turn.content}</p>
+
+          {#if turn.role === "assistant"}
+            <!-- Safe because the renderer cannot emit HTML. See lib/markdown.ts. -->
+            <div class="md">{@html renderMarkdown(turn.content)}</div>
+          {:else}
+            <!-- Own words stay literal. Nobody typing a question into a one-line
+                 box means it as markup, and formatting it would silently eat the
+                 asterisks and underscores out of what was actually asked. -->
+            <p class="content">{turn.content}</p>
+          {/if}
         </div>
       </div>
     {/each}
@@ -147,13 +156,9 @@
           {/if}
 
           {#if waiting}
-            <!-- Three dots rather than a spinner: it reads as "composing" instead
-                 of "loading", which is what is actually happening. -->
-            <div class="dots" aria-label="Magi is thinking">
-              <span></span><span></span><span></span>
-            </div>
+            <MagiSpinner />
           {:else}
-            <p class="content">{conversation.streaming}<span class="caret"></span></p>
+            <div class="md streaming">{@html renderMarkdown(conversation.streaming)}</div>
           {/if}
         </div>
       </div>
@@ -188,14 +193,23 @@
 <style>
   .panel {
     /* A light scrim over the OS material: enough to hold text contrast against a
-       bright desktop, not so much that it defeats the blur underneath. */
+       bright desktop, not so much that it defeats the blur underneath.
+
+       The radius must match `windowEffects.radius` in tauri.conf.json. The OS
+       rounds the blurred material; this element paints the scrim on top of it.
+       If only one of the two is rounded, the corners disagree — a square scrim
+       over rounded material leaves four tabs of scrim with no blur behind them,
+       which is visible as a lighter patch in each corner. */
     background: rgba(12, 12, 16, 0.3);
+    border-radius: 14px;
     box-sizing: border-box;
     color: #f4f4f5;
     display: flex;
     flex-direction: column;
     font: 13px/1.5 -apple-system, BlinkMacSystemFont, sans-serif;
     height: 100vh;
+    /* Keeps children from painting over the rounded corners. */
+    overflow: hidden;
     padding: 12px 14px;
   }
 
@@ -223,6 +237,10 @@
     margin: 10px 0;
     min-height: 0;
     overflow-y: auto;
+    /* Room for the scrollbar to sit in. Without it the overlay scrollbar lands
+       on top of the bubbles' right edge, and on a right-aligned bubble it lands
+       on the text. */
+    padding-right: 8px;
     /* Copying an answer is the most likely thing wanted from this area, so it
        stays selectable while the draggable header does not. */
     user-select: text;
@@ -239,6 +257,9 @@
   .bubble {
     border-radius: 12px;
     max-width: 82%;
+    /* A table or a long unbroken token must not stretch the bubble past the
+       panel; it scrolls or wraps inside instead. */
+    min-width: 0;
     padding: 7px 10px;
   }
 
@@ -293,41 +314,138 @@
     overflow-y: auto;
   }
 
-  .dots {
-    display: flex;
-    gap: 4px;
-    padding: 4px 0;
+  /* ---- Rendered markdown ------------------------------------------------
+     Selectors here are `:global` because this markup comes from
+     `renderMarkdown` at runtime, so Svelte's compiler never sees the elements
+     and would scope the classes off them. The `.md` wrapper is the boundary:
+     everything is written as a descendant of it, so none of it leaks. */
+
+  .md {
+    overflow-wrap: anywhere;
   }
 
-  .dots span {
-    animation: pulse 1.3s ease-in-out infinite;
-    background: currentColor;
-    border-radius: 50%;
-    height: 5px;
-    opacity: 0.35;
-    width: 5px;
+  .md :global(> :first-child) {
+    margin-top: 0;
   }
 
-  .dots span:nth-child(2) {
-    animation-delay: 0.18s;
+  .md :global(> :last-child) {
+    margin-bottom: 0;
   }
 
-  .dots span:nth-child(3) {
-    animation-delay: 0.36s;
+  .md :global(p),
+  .md :global(ul),
+  .md :global(ol),
+  .md :global(blockquote),
+  .md :global(pre) {
+    margin: 0 0 0.55em;
   }
 
-  @keyframes pulse {
-    30% {
-      opacity: 0.9;
-      transform: translateY(-2px);
-    }
+  .md :global(h1),
+  .md :global(h2),
+  .md :global(h3),
+  .md :global(h4) {
+    font-size: 1em;
+    font-weight: 600;
+    margin: 0.7em 0 0.3em;
   }
 
-  /* A caret while tokens arrive: without it a model that pauses mid-answer looks
-     like one that has finished. */
-  .caret {
+  .md :global(ul),
+  .md :global(ol) {
+    padding-left: 1.25em;
+  }
+
+  .md :global(li) {
+    margin: 0.15em 0;
+  }
+
+  .md :global(strong) {
+    font-weight: 600;
+  }
+
+  .md :global(blockquote) {
+    border-left: 2px solid rgba(255, 255, 255, 0.2);
+    opacity: 0.75;
+    padding-left: 8px;
+  }
+
+  .md :global(code) {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.92em;
+    padding: 1px 4px;
+  }
+
+  .md :global(pre) {
+    background: rgba(0, 0, 0, 0.28);
+    border-radius: 6px;
+    overflow-x: auto;
+    padding: 7px 9px;
+  }
+
+  /* A code block keeps its own whitespace, so it must not inherit the wrapping
+     that the surrounding prose wants. */
+  .md :global(pre code) {
+    background: none;
+    overflow-wrap: normal;
+    padding: 0;
+    white-space: pre;
+  }
+
+  .md :global(hr) {
+    border: none;
+    border-top: 1px solid rgba(255, 255, 255, 0.14);
+    margin: 0.7em 0;
+  }
+
+  .md :global(.md-table) {
+    margin: 0 0 0.55em;
+    overflow-x: auto;
+  }
+
+  .md :global(table) {
+    border-collapse: collapse;
+    font-size: 0.95em;
+  }
+
+  .md :global(th),
+  .md :global(td) {
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    padding: 3px 7px;
+    text-align: left;
+    /* Cells wrap only where the text allows; the wrapper scrolls instead of the
+       table collapsing into unreadable columns. */
+    white-space: nowrap;
+  }
+
+  .md :global(th) {
+    background: rgba(255, 255, 255, 0.07);
+    font-weight: 600;
+  }
+
+  /* Links are text, not anchors — see lib/markdown.ts. Underlined so the model's
+     intent still reads, dimmed alongside the destination so a mismatch between
+     the two is visible. */
+  .md :global(.md-link) {
+    text-decoration: underline;
+    text-decoration-color: rgba(255, 255, 255, 0.4);
+  }
+
+  .md :global(.md-url) {
+    font-size: 0.85em;
+    margin-left: 3px;
+    opacity: 0.5;
+  }
+
+  /* The caret belongs at the end of the last line of text, but the markdown is
+     injected as a block of elements, so there is no place in the template to put
+     a sibling — one would land on its own line below the paragraph. A pseudo
+     element on the last child sits inline at the end of that child's text
+     instead, which is where a cursor goes. */
+  .md.streaming :global(> :last-child)::after {
     animation: blink 1.1s steps(2, start) infinite;
     background: currentColor;
+    content: "";
     display: inline-block;
     height: 1em;
     margin-left: 2px;
@@ -342,8 +460,7 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .caret,
-    .dots span {
+    .md.streaming :global(> :last-child)::after {
       animation: none;
     }
   }

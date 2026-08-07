@@ -5,7 +5,7 @@ Complete breakdown of what is done and what is pending, across every milestone.
 **Last updated:** 2026-08-06
 **Current phase:** M2 — the text loop works end to end; manual verification pending
 **Current version:** `0.1.0-alpha.1` (released — see [VERSIONING.md](VERSIONING.md))
-**Overall:** 52 / 141 tasks done (37%)
+**Overall:** 53 / 142 tasks done (37%)
 
 Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 
@@ -17,13 +17,13 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 |---|---|---|---:|---:|---|
 | **M0** | Foundations | — | 15 | 15 | ✅ Complete |
 | **M1** | Shell — tray, hotkey, windows | `0.1.0-alpha.1` | 15 | 16 | ✅ Shipped |
-| **M2** | Config & providers | `0.2.0-alpha.1` | 22 | 25 | 🔨 In progress |
+| **M2** | Config & providers | `0.2.0-alpha.1` | 23 | 26 | 🔨 In progress |
 | **M3** | Pre-flight & capability tiers | `0.2.0-alpha.1` | 0 | 14 | ⬜ |
 | **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 0 | 14 | ⬜ |
 | **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 0 | 13 | ⬜ |
 | **M6** | Session machine & panel UX | `0.5.0-beta.1` | 0 | 16 | ⬜ |
 | **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 14 | ⬜ |
-| — | **v1 total** | `1.0.0` | **52** | **127** | |
+| — | **v1 total** | `1.0.0` | **53** | **128** | |
 | **M8** | v2 — wake word & TTS | `1.1.0` | 0 | 9 | 🔮 Post-v1 |
 | **M9** | v3 — computer use | `1.2.0` | 0 | 5 | 🔮 Post-v1 |
 
@@ -112,6 +112,7 @@ The milestone was widened from pure infrastructure for one reason: with the orig
 - [x] Panel: text input and streaming answer, growing to a max height then scrolling
 - [x] Inline errors naming the provider and the resolved URL — "connection refused" is useless without knowing what it tried to reach
 - [x] Settings UI — provider list with add / edit / remove
+- [x] Render answers as markdown — bold, lists, tables, code. Models emit markdown whether or not it is asked for, so plain text does not mean "no formatting", it means showing `**weather.com**` with the asterisks. Rendered with raw HTML disabled at the parser rather than sanitised afterwards, images disabled (a model-chosen image URL is a read-receipt beacon), and links rendered as non-navigable text next to their real destination — this panel is the app's own webview, so following a link would replace Magi's UI with no way back
 - [ ] Settings UI — hotkey capture control
 - [ ] `[prompt] context` in `config.toml` — free text appended to Magi's system prompt. **Additive, never a replacement**: Magi's own instructions carry the contract that makes agentic capture fire, and letting a user overwrite them breaks tier 1 silently
 
@@ -279,6 +280,7 @@ Recorded so they are not re-proposed.
 - [ ] Consider extracting a `magi-core` crate with no Tauri dependency. Magi's interesting logic — config parsing and migration, tier assignment, prompt assembly, deictic detection, token-stream parsing — touches no platform API, but it currently lives in a crate that depends on `tauri`, so testing it drags in a whole platform. A core crate would let those tests run anywhere in seconds and would make the cross-platform claim structural rather than aspirational. Not worth it at M1's 300 lines of logic; revisit when `llm/`, `config/`, and `session/` land in M2
 - [x] Split CI by what actually needs macOS. Everything currently runs on `macos-14`, but `cargo fmt`, `svelte-check`, and the task-count check are platform-independent — and macOS runners bill at a 10x minute multiplier and are markedly harder to get allocated (observed: two consecutive runs lost, one to a service outage and one to "job was not acquired by Runner of type hosted"). Move the platform-independent checks to `ubuntu-latest` and leave macOS for the build. Caveat: `cargo test` on Linux needs Tauri's webkit2gtk system dependencies, which is real work rather than a config line — but it would also prove the cross-platform claim is not vapour
 - [ ] Keep all tests free of GPU, microphone, display, and network dependencies
+- [ ] Set a Content-Security-Policy. `app.security.csp` is currently `null`, so Tauri injects none. The panel renders model output as HTML, and while the markdown renderer is configured so it cannot emit tags, that is one layer: a CSP is what makes an escape from that layer inert instead of exploitable. Needs care rather than a one-line change — Svelte's scoped styles and markdown-it's table alignment both use inline `style`, so `style-src` has to allow them, and the dev server's HMR needs its own origin allowed
 - [ ] Windows packaging
 - [ ] Linux packaging
 - [ ] Issue and PR templates
