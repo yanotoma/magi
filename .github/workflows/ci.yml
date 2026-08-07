@@ -61,7 +61,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Tauri's Linux dependencies
+      - name: Install Linux build dependencies
+        # Two groups. Tauri needs the webview stack; M4 added the rest.
+        #
+        # `cmake` is for whisper.cpp, which whisper-rs compiles from source.
+        # `libasound2-dev` is cpal's ALSA backend, named by cpal's own README —
+        # `build-essential` gives a C++ compiler but neither of these.
+        #
+        # Both were missed for five commits because they were written down as a note
+        # instead of added here, and nothing surfaced it: ci.yml only runs on `main`
+        # and on pull requests, so no CI had touched the audio code at all. The first
+        # sign would have been the PR failing.
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -72,7 +82,9 @@ jobs:
             libssl-dev \
             patchelf \
             build-essential \
-            file
+            file \
+            cmake \
+            libasound2-dev
 
       - name: Install Rust toolchain
         run: rustup show
@@ -100,6 +112,13 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
+
+      - name: Ensure cmake is present
+        # whisper-rs compiles whisper.cpp, which shells out to cmake. GitHub's macOS
+        # image ships it, but an undeclared dependency on the runner image is the kind
+        # of thing that breaks on an image update with a message about a missing
+        # binary rather than about a missing declaration. A no-op when it is there.
+        run: cmake --version || brew install cmake
 
       - name: Install Rust toolchain
         run: rustup show
