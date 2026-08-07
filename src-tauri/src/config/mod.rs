@@ -95,6 +95,27 @@ pub struct ActiveModel {
     pub model: String,
 }
 
+/// Which appearance the windows use.
+///
+/// Application state rather than a CSS class. Forcing dark from stylesheets
+/// alone would leave the native controls the webview draws — inputs, scrollbars,
+/// select popups — following the system, so a forced theme would be half
+/// applied. Rust tells the webview, and the CSS follows from there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Theme {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct AppearanceConfig {
+    pub theme: Theme,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HotkeyConfig {
@@ -118,6 +139,9 @@ pub struct Config {
     #[serde(default)]
     pub hotkey: HotkeyConfig,
 
+    #[serde(default)]
+    pub appearance: AppearanceConfig,
+
     /// The provider and model a turn goes to. `None` until one is chosen.
     #[serde(default)]
     pub active: Option<ActiveModel>,
@@ -138,6 +162,7 @@ impl Default for Config {
         Self {
             schema_version: CURRENT_SCHEMA_VERSION,
             hotkey: HotkeyConfig::default(),
+            appearance: AppearanceConfig::default(),
             active: None,
             providers: Vec::new(),
         }
@@ -251,6 +276,18 @@ mod tests {
         assert_eq!(config.hotkey.toggle, "Alt+Space");
         assert!(config.providers.is_empty());
         assert_eq!(config.schema_version, CURRENT_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn theme_defaults_to_following_the_system() {
+        assert_eq!(Config::default().appearance.theme, Theme::System);
+    }
+
+    #[test]
+    fn theme_is_written_and_read_in_lower_case() {
+        let config = Config::from_toml("[appearance]\ntheme = \"dark\"\n")
+            .expect("a lower-case theme must parse");
+        assert_eq!(config.appearance.theme, Theme::Dark);
     }
 
     #[test]

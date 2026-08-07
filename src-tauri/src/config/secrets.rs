@@ -46,6 +46,32 @@ impl std::fmt::Debug for Secret {
     }
 }
 
+/// A fingerprint that identifies a stored key without revealing it.
+///
+/// Computed here rather than in the frontend on purpose. Masking in the UI
+/// would mean the real key had already crossed into the webview, the DOM and
+/// devtools, and the asterisks would be decoration over a secret that is
+/// already exposed. Only this string ever leaves the backend.
+///
+/// Short keys are masked entirely. Showing the ends of an eight-character
+/// secret reveals most of it, and the point is to tell two keys apart, not to
+/// display one.
+pub fn fingerprint(secret: &str) -> String {
+    const REVEAL_ENDS_ABOVE: usize = 20;
+    const HEAD: usize = 4;
+    const TAIL: usize = 4;
+
+    let characters: Vec<char> = secret.chars().collect();
+
+    if characters.len() <= REVEAL_ENDS_ABOVE {
+        return "•".repeat(characters.len().clamp(4, 12));
+    }
+
+    let head: String = characters.iter().take(HEAD).collect();
+    let tail: String = characters.iter().skip(characters.len() - TAIL).collect();
+    format!("{head}…{tail}")
+}
+
 pub trait SecretStore: Send + Sync {
     /// `Ok(None)` for a provider with no key — the normal case for Ollama and
     /// LM Studio, not a failure.
@@ -170,6 +196,29 @@ mod tests {
         store.set("b", "key-b").unwrap();
         assert_eq!(store.get("a").unwrap(), Some("key-a".to_string()));
         assert_eq!(store.get("b").unwrap(), Some("key-b".to_string()));
+    }
+
+    #[test]
+    fn a_long_key_shows_both_ends_so_two_keys_can_be_told_apart() {
+        let hint = fingerprint("sk-proj-abcdefghijklmnopqrstuvwxyz-4f2a");
+        assert_eq!(hint, "sk-p…4f2a");
+    }
+
+    #[test]
+    fn a_short_key_is_masked_entirely() {
+        // Showing the ends of an eight-character secret reveals most of it. The
+        // job is to distinguish two keys, not to display one.
+        let hint = fingerprint("abc12345");
+        assert!(!hint.contains('a'), "leaked the start: {hint}");
+        assert!(!hint.contains('5'), "leaked the end: {hint}");
+    }
+
+    #[test]
+    fn the_fingerprint_does_not_reveal_the_length_of_a_long_key() {
+        // A fixed shape avoids turning the hint into a length oracle.
+        let short_ish = fingerprint(&"x".repeat(30));
+        let very_long = fingerprint(&"x".repeat(300));
+        assert_eq!(short_ish.chars().count(), very_long.chars().count());
     }
 
     #[test]

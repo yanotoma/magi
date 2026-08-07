@@ -16,6 +16,12 @@ export type ProviderView = {
   requires_key: boolean;
   /** Whether a key is stored. The key itself never reaches the frontend. */
   has_key: boolean;
+  /**
+   * Enough of the stored key to tell two apart, never enough to use one.
+   * Computed in the backend — masking in the UI would mean the real key had
+   * already crossed into the webview.
+   */
+  key_hint: string | null;
 };
 
 export type ActiveModel = {
@@ -23,10 +29,17 @@ export type ActiveModel = {
   model: string;
 };
 
+export type Theme = "system" | "light" | "dark";
+
+export type AppearanceConfig = {
+  theme: Theme;
+};
+
 export type ConfigView = {
   providers: ProviderView[];
   active: ActiveModel | null;
   hotkey: string;
+  appearance: AppearanceConfig;
   config_path: string;
 };
 
@@ -68,6 +81,16 @@ export const discoverModels = async (
 
 export const removeProvider = async (id: string): Promise<ConfigView> =>
   invoke<ConfigView>("remove_provider", { id });
+
+/**
+ * Sets the theme and remembers it.
+ *
+ * Applied by Rust to the webviews rather than by CSS alone: the native controls
+ * the webview draws — inputs, scrollbars, select popups — follow the window's
+ * theme, so a stylesheet-only override would be half applied.
+ */
+export const setTheme = async (theme: Theme): Promise<ConfigView> =>
+  invoke<ConfigView>("set_theme", { theme });
 
 export const setActiveModel = async (provider: string, model: string): Promise<ConfigView> =>
   invoke<ConfigView>("set_active_model", { provider, model });

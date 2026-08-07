@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::config::secrets::SecretStore;
-use crate::config::{ActiveModel, Config, ProviderConfig};
+use crate::config::{ActiveModel, AppearanceConfig, Config, ProviderConfig, Theme};
 use crate::llm::discovery;
 
 /// Everything a command needs, assembled once at startup.
@@ -50,6 +50,9 @@ pub struct ProviderView {
     pub models: Vec<String>,
     pub requires_key: bool,
     pub has_key: bool,
+    /// Enough to tell two keys apart, never enough to use one. `None` when no
+    /// key is stored.
+    pub key_hint: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -57,6 +60,7 @@ pub struct ConfigView {
     pub providers: Vec<ProviderView>,
     pub active: Option<ActiveModel>,
     pub hotkey: String,
+    pub appearance: AppearanceConfig,
     pub config_path: String,
 }
 
@@ -65,6 +69,20 @@ pub struct SaveProviderRequest {
     pub provider: ProviderConfig,
     /// `None` leaves any stored key untouched; `Some("")` clears it.
     pub api_key: Option<String>,
+}
+
+/// The stored key for a provider, if there is one.
+///
+/// A keychain error is treated as "no key" rather than surfaced: Settings must
+/// still render so the user can fix whatever is wrong, and a locked keychain
+/// should not blank the whole screen.
+fn stored_key(state: &State<'_, AppState>, provider_id: &str) -> Option<String> {
+    state
+        .secrets
+        .get(provider_id)
+        .ok()
+        .flatten()
+        .filter(|k| !k.is_empty())
 }
 
 #[tauri::command]
@@ -83,12 +101,10 @@ pub fn get_config(state: State<'_, AppState>) -> CommandResult<ConfigView> {
             base_url: p.base_url.clone(),
             models: p.models.clone(),
             requires_key: p.requires_key,
-            has_key: state
-                .secrets
-                .get(&p.id)
-                .ok()
-                .flatten()
-                .is_some_and(|k| !k.is_empty()),
+            has_key: stored_key(&state, &p.id).is_some(),
+            key_hint: stored_key(&state, &p.id)
+                .as_deref()
+                .map(crate::config::secrets::fingerprint),
         })
         .collect();
 
@@ -96,6 +112,7 @@ pub fn get_config(state: State<'_, AppState>) -> CommandResult<ConfigView> {
         providers,
         active: config.active.clone(),
         hotkey: config.hotkey.toggle.clone(),
+        appearance: config.appearance.clone(),
         // Shown in Settings so the file is discoverable. A config nobody can
         // find is a config nobody can paste into a bug report.
         config_path: Config::path_in(&state.config_dir).display().to_string(),
@@ -210,4 +227,43 @@ pub async fn discover_models(
     };
 
     discovery::discover_models(&state.http, &provider, key.as_deref()).await
+}
+
+/// Applies a theme to every window and remembers it.
+#[tauri::command]
+pub fn set_theme(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    theme: Theme,
+) -> CommandResult<ConfigView> {
+    {
+        let mut config = state.config.lock().map_err(to_message)?;
+        config.appearance.theme = theme;
+        config.save(&state.config_dir).map_err(to_message)?;
+    }
+
+    apply_theme(&app, theme);
+    get_config(state)
+}
+
+/// Pushes the theme down to the webviews.
+///
+/// `None` means "follow the system", which is what makes System a real option
+/// rather than a synonym for whichever mode happened to be active at startup.
+pub fn apply_theme(app: &tauri::AppHandle, theme: Theme) {
+    use tauri::Manager;
+
+    let requested = match theme {
+        Theme::System => None,
+        Theme::Light => Some(tauri::Theme::Light),
+        Theme::Dark => Some(tauri::Theme::Dark),
+    };
+
+    for label in [crate::windows::PANEL, crate::windows::SETTINGS] {
+        if let Some(window) = app.get_webview_window(label) {
+            if let Err(error) = window.set_theme(requested) {
+                tracing::warn!(%error, label, "could not apply the theme to this window");
+            }
+        }
+    }
 }

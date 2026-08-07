@@ -64,12 +64,16 @@ pub fn run() {
                 Config::default()
             });
 
+            let theme = config.appearance.theme;
+
             app.manage(AppState {
                 http: reqwest::Client::new(),
                 config: Mutex::new(config),
                 config_dir,
                 secrets: Box::new(KeyringStore),
             });
+
+            commands::apply_theme(app.handle(), theme);
 
             tray::init(app)?;
 
@@ -88,6 +92,7 @@ pub fn run() {
             commands::remove_provider,
             commands::set_active_model,
             commands::discover_models,
+            commands::set_theme,
         ])
         .on_window_event(|window, event| {
             // Closing a window must never quit a tray app. Hide instead, and let
