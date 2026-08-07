@@ -9,6 +9,29 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export type ProviderKind = "openai-compatible" | "anthropic";
 
+/**
+ * How much of Magi works with a model.
+ *
+ * Assigned by pre-flight, never chosen. `unreachable` is separate from
+ * `text-only` on purpose: a text-only model works, an unreachable one does not,
+ * and the fixes are unrelated.
+ */
+export type Tier = "agentic" | "heuristic" | "text-only" | "unreachable";
+
+/** One model's probe results, as the capability matrix renders them. */
+export type ModelCapability = {
+  model: string;
+  tier: Tier;
+  /** Short name for the tier, from the backend so the wording lives in one place. */
+  label: string;
+  /** Why the tier is what it is, in terms the user can act on. */
+  explanation: string;
+  reachable: boolean;
+  vision: boolean;
+  tools: boolean;
+  structured_output: boolean;
+};
+
 export type ProviderView = {
   id: string;
   kind: ProviderKind;
@@ -23,6 +46,13 @@ export type ProviderView = {
    * already crossed into the webview.
    */
   key_hint: string | null;
+
+  /**
+   * Results for the models that have been tested. Models absent from this list
+   * have not been probed, which must render as unknown rather than as incapable
+   * — a model nobody tested is not a model that failed.
+   */
+  capabilities: ModelCapability[];
 };
 
 export type ActiveModel = {
@@ -101,6 +131,17 @@ export const discoverModels = async (
   apiKey?: string,
 ): Promise<string[]> =>
   invoke<string[]>("discover_models", { provider, apiKey: apiKey ?? null });
+
+/**
+ * Probes one model and records what it can do.
+ *
+ * Four requests against the endpoint, so it is slow and — on a metered provider —
+ * costs a little. Results are cached, and cleared automatically whenever the
+ * provider is saved, since capabilities belong to the endpoint as much as to the
+ * model.
+ */
+export const runPreflight = async (providerId: string, model: string): Promise<ConfigView> =>
+  invoke<ConfigView>("run_preflight", { providerId, model });
 
 export const removeProvider = async (id: string): Promise<ConfigView> =>
   invoke<ConfigView>("remove_provider", { id });

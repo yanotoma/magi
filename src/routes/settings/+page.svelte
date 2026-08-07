@@ -9,6 +9,8 @@
     setPromptContext,
     setHotkey,
     discoverModels,
+    runPreflight,
+    type ModelCapability,
     MAX_PROMPT_CONTEXT,
     PRESETS,
     type ConfigView,
@@ -39,6 +41,14 @@
   let discovering = $state(false);
   let discovered = $state<string | null>(null);
   let capturing = $state(false);
+
+  /** Which model is being probed, or null.
+   *
+   *  Two fields rather than a joined `"provider model"` key. Both halves are
+   *  arbitrary text — provider ids are typed by the user, model names come from the
+   *  endpoint — so any separator could appear inside one of them. The Rust cache
+   *  avoids the same trap with a nested map. */
+  let testing = $state<{ provider: string; model: string } | null>(null);
 
   // An editable copy rather than binding straight to `config.prompt.context`. The
   // backend is the source of truth and every mutation replaces `config` wholesale,
@@ -110,6 +120,41 @@
   const queueContextSave = () => {
     clearTimeout(contextTimer);
     contextTimer = setTimeout(flushContext, 600);
+  };
+
+  /** Probe results for one model, or undefined when it has not been tested. */
+  const capabilityFor = (
+    provider: ProviderView,
+    model: string,
+  ): ModelCapability | undefined => provider.capabilities.find((c) => c.model === model);
+
+  const isTesting = (providerId: string, model: string): boolean =>
+    testing?.provider === providerId && testing?.model === model;
+
+  /** A capability cell: yes, no, or not yet asked.
+   *
+   *  Three states rather than a boolean. "Untested" and "failed" are different
+   *  claims, and only one of them is Magi's to make — rendering an untested model
+   *  as a cross would assert something nobody has checked. */
+  const glyph = (value: boolean | undefined): string => {
+    if (value === undefined) return "–";
+    return value ? "✓" : "✕";
+  };
+
+  /** Runs pre-flight for one model.
+   *
+   *  One at a time. Each probe is four requests, and against a local server sharing
+   *  one GPU they would queue anyway; against a metered API, concurrent probes can
+   *  trip a rate limit, which would come back as a failure and be recorded as a
+   *  capability the model does not have. */
+  const test = async (providerId: string, model: string) => {
+    if (testing !== null) return;
+    testing = { provider: providerId, model };
+    try {
+      await run(() => runPreflight(providerId, model));
+    } finally {
+      testing = null;
+    }
   };
 
   const toggleCapture = () => {
@@ -389,18 +434,82 @@
               {#if provider.models.length === 0}
                 <p class="hint">No models yet — edit and fetch them.</p>
               {:else}
-                <div class="models">
-                  {#each provider.models as model (model)}
-                    <button
-                      type="button"
-                      class="model"
-                      class:selected={isActive(provider.id, model)}
-                      onclick={() => run(() => setActiveModel(provider.id, model))}
-                    >
-                      {model}
-                    </button>
-                  {/each}
-                </div>
+                <table class="matrix">
+                  <thead>
+                    <tr>
+                      <th>Model</th>
+                      <th title="The endpoint answered with this model and key">Reach</th>
+                      <th title="Read a generated test image correctly">Sees</th>
+                      <th title="Made a structurally valid tool call">Tools</th>
+                      <th title="Returned JSON matching a schema">JSON</th>
+                      <th>Capability</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {#each provider.models as model (model)}
+                      {@const probed = capabilityFor(provider, model)}
+                      <tr class:selected={isActive(provider.id, model)}>
+                        <td>
+                          <button
+                            type="button"
+                            class="model"
+                            class:selected={isActive(provider.id, model)}
+                            onclick={() => run(() => setActiveModel(provider.id, model))}
+                          >
+                            {model}
+                          </button>
+                        </td>
+
+                        <!--
+                          Three states per cell, not two. An untested model shows a
+                          dash: it has not failed, nobody has asked it yet, and
+                          rendering that as a cross would be a claim Magi has not
+                          earned.
+                        -->
+                        <td class="mark">{glyph(probed?.reachable)}</td>
+                        <td class="mark">{glyph(probed?.vision)}</td>
+                        <td class="mark">{glyph(probed?.tools)}</td>
+                        <td class="mark">{glyph(probed?.structured_output)}</td>
+
+                        <td>
+                          {#if probed}
+                            <span class="tier {probed.tier}" title={probed.explanation}>
+                              {probed.label}
+                            </span>
+                          {:else}
+                            <span class="untested">Not tested</span>
+                          {/if}
+                        </td>
+
+                        <td>
+                          <button
+                            type="button"
+                            class="test"
+                            disabled={testing !== null}
+                            onclick={() => test(provider.id, model)}
+                          >
+                            {isTesting(provider.id, model)
+                              ? "Testing…"
+                              : probed
+                                ? "Re-test"
+                                : "Test"}
+                          </button>
+                        </td>
+                      </tr>
+
+                      {#if probed && isActive(provider.id, model)}
+                        <!-- The explanation is shown outright for the model actually
+                             in use, rather than hidden in a tooltip. Someone
+                             wondering why screen reading is off is asking about the
+                             model they selected. -->
+                        <tr class="why">
+                          <td colspan="7">{probed.explanation}</td>
+                        </tr>
+                      {/if}
+                    {/each}
+                  </tbody>
+                </table>
               {/if}
             </li>
           {/each}
@@ -796,6 +905,80 @@
 
   .saved {
     color: AccentColor;
+  }
+
+  /* The capability matrix. A table because it is one: models down, capabilities
+     across, and a cell answers "can this model do this". */
+  .matrix {
+    border-collapse: collapse;
+    font-size: 11px;
+    margin-top: 8px;
+    width: 100%;
+  }
+
+  .matrix th {
+    font-weight: 500;
+    opacity: 0.55;
+    padding: 3px 6px;
+    text-align: left;
+    white-space: nowrap;
+  }
+
+  .matrix td {
+    border-top: 1px solid color-mix(in srgb, Canvas 88%, CanvasText 12%);
+    padding: 3px 6px;
+    vertical-align: middle;
+  }
+
+  .matrix tr.selected td {
+    background: color-mix(in srgb, Canvas 92%, AccentColor 8%);
+  }
+
+  .mark {
+    text-align: center;
+    /* Fixed width so the columns do not shift when a dash becomes a tick. */
+    width: 2.4em;
+  }
+
+  .tier {
+    border-radius: 3px;
+    padding: 1px 5px;
+    white-space: nowrap;
+  }
+
+  /* Colour carries the same ranking as the tier itself, but never alone: the
+     label is always spelled out beside it, since a colour-only signal excludes
+     anyone who cannot distinguish them and says nothing on a screenshot. */
+  .tier.agentic {
+    background: color-mix(in srgb, Canvas 70%, green 30%);
+  }
+
+  .tier.heuristic {
+    background: color-mix(in srgb, Canvas 70%, goldenrod 30%);
+  }
+
+  .tier.text-only {
+    background: color-mix(in srgb, Canvas 80%, CanvasText 20%);
+  }
+
+  .tier.unreachable {
+    background: color-mix(in srgb, Canvas 72%, crimson 28%);
+  }
+
+  .untested {
+    opacity: 0.45;
+  }
+
+  .why td {
+    border-top: none;
+    opacity: 0.6;
+    padding-top: 0;
+  }
+
+  .test {
+    font-size: 11px;
+    padding: 2px 8px;
+    white-space: nowrap;
   }
 
   /* Wide and tall enough that the label does not move when it swaps between the

@@ -6,6 +6,7 @@
 //! `.claude/skills/llm-providers/SKILL.md`.
 
 pub mod anthropic;
+pub mod cache;
 pub mod capability;
 pub mod discovery;
 pub mod openai;

@@ -5,7 +5,7 @@ Complete breakdown of what is done and what is pending, across every milestone.
 **Last updated:** 2026-08-07
 **Current phase:** M3 — pre-flight and capability tiers, targeting `0.2.0-alpha.2`
 **Current version:** `0.2.0-alpha.1` (released — see [VERSIONING.md](VERSIONING.md))
-**Overall:** 57 / 143 tasks done (40%)
+**Overall:** 70 / 143 tasks done (49%)
 
 Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 
@@ -18,12 +18,12 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 | **M0** | Foundations | — | 15 | 15 | ✅ Complete |
 | **M1** | Shell — tray, hotkey, windows | `0.1.0-alpha.1` | 15 | 16 | ✅ Shipped |
 | **M2** | Config & providers | `0.2.0-alpha.1` | 27 | 27 | ✅ Shipped |
-| **M3** | Pre-flight & capability tiers | `0.2.0-alpha.2` | 0 | 14 | 🔨 Next |
+| **M3** | Pre-flight & capability tiers | `0.2.0-alpha.2` | 13 | 14 | 🔍 Verifying |
 | **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 0 | 14 | ⬜ |
 | **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 0 | 13 | ⬜ |
 | **M6** | Session machine & panel UX | `0.5.0-beta.1` | 0 | 16 | ⬜ |
 | **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 14 | ⬜ |
-| — | **v1 total** | `1.0.0` | **57** | **129** | |
+| — | **v1 total** | `1.0.0` | **70** | **129** | |
 | **M8** | v2 — wake word & TTS | `1.1.0` | 0 | 9 | 🔮 Post-v1 |
 | **M9** | v3 — computer use | `1.2.0` | 0 | 5 | 🔮 Post-v1 |
 
@@ -128,19 +128,19 @@ Three bugs the milestone only surfaced when run, all worth keeping in mind:
 
 ## M3 — Pre-flight & capability tiers
 
-- [ ] `llm::preflight` module scaffolding
-- [ ] Probe 1 — reachability, distinguishing bad URL / bad key / model not pulled
-- [ ] Probe 2 — vision, using a generated image with a known digit
-- [ ] Probe 3 — tool-calling, validating a well-formed call rather than non-empty output
-- [ ] Probe 4 — structured output against a small JSON schema
-- [ ] Tier assignment logic from probe results
-- [ ] Cache results per provider + model
-- [ ] Unit tests for tier assignment across every probe-result combination
-- [ ] Settings UI — capability matrix per provider
-- [ ] Settings UI — *Re-test* button with progress
-- [ ] Surface the active tier in the tray tooltip
-- [ ] `llm::prompt` — assemble messages from `(tier, config, history)` rather than from a constant. The prompt is tier-dependent: tier 1 needs instructions on when to call `capture_screen`; tier 2 must not be told about tools at all, since the harness captures ahead of it by heuristic and mentioning tools only invites malformed tool syntax in prose; tier 3 needs to know it cannot see the screen so it stops promising to look
-- [ ] Unit tests for prompt assembly per tier — pure logic, no network
+- [x] `llm::preflight` module scaffolding — verdict functions pure and separate from the async orchestration, so every way a model can almost-pass is a unit test
+- [x] Probe 1 — reachability, distinguishing bad URL / bad key / model not pulled. A trivial completion rather than `GET /v1/models`: a provider can list a model it cannot serve, and the Anthropic-shaped endpoints have no listing route
+- [x] Probe 2 — vision, using a generated seven-segment `7`. Fails a confident description with no digit in it, which is what an endpoint that accepted the payload and ignored it produces — and fails a denial that happens to guess right, since a lucky guess must not promote a blind model
+- [x] Probe 3 — tool-calling, validating a well-formed call rather than non-empty output. Also rejects a call with an empty argument object and a call to a tool never offered: structurally valid is not the same as usable
+- [x] Probe 4 — structured output against a small JSON schema. Accepts a fenced code block, rejects prose around the JSON and `"celsius": "21"` — a schema half-followed is not schema support
+- [x] Tier assignment logic from probe results. Total function, no fallback branch. `Unreachable` is its own tier: a text-only model works and an unreachable one does not, and the fixes are unrelated
+- [x] Cache results per provider + model in `capabilities.json`, **not** `config.toml` — that file is a contract surface the user hand-edits, and probe results are derived, disposable, and meaningless to write by hand. Cleared whenever a provider is saved, since capabilities belong to the endpoint as much as the model
+- [x] Unit tests for tier assignment across every probe-result combination — all sixteen, as a table, so adding a capability forces the list to be revisited
+- [x] Settings UI — capability matrix per provider. Three states per cell, not two: an untested model shows a dash, because "untested" and "failed" are different claims and only one is Magi's to make
+- [x] Settings UI — *Test* / *Re-test* per model, one at a time. Concurrent probes against a metered API can trip a rate limit, which would be recorded as a capability the model lacks
+- [x] Surface the active tier in the tray tooltip — the only passive reminder a user gets that their model cannot see the screen
+- [x] `llm::prompt` — assemble messages from `(tier, config, history)` rather than from a constant. The prompt is tier-dependent: tier 1 needs instructions on when to call `capture_screen`; tier 2 must not be told about tools at all, since the harness captures ahead of it by heuristic and mentioning tools only invites malformed tool syntax in prose; tier 3 needs to know it cannot see the screen so it stops promising to look
+- [x] Unit tests for prompt assembly per tier — pure logic, no network. Includes an attempt to displace Magi's instructions from all four tiers with hostile context values
 - [ ] Design the degraded tray icon. A cancel slash across three separated nodes does not read at 22pt — the mark is discontinuous, so the bar alternates between empty space and ring and every crossing forces a choice between eating the ring and breaking the bar. Needs a different idea, looked at in a real menu bar
 
 ---

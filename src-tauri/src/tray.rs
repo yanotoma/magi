@@ -1,6 +1,7 @@
 //! The menu-bar icon: Magi's only permanently visible surface.
 
 use crate::error::ShellError;
+use crate::llm::capability::Tier;
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -105,10 +106,46 @@ pub fn init(app: &tauri::App) -> Result<(), ShellError> {
                 );
             }
         })
+        .tooltip(TOOLTIP_UNTESTED)
         .build(app)
         .map_err(|e| ShellError::Tray(e.to_string()))?;
 
     Ok(())
+}
+
+/// Shown until a model has been selected and probed.
+const TOOLTIP_UNTESTED: &str = "Magi — no model tested yet";
+
+/// The tooltip text for the active model and its tier.
+///
+/// Pure so it can be tested; `set_tooltip` needs a running app. The tier goes in
+/// the tooltip because it is the one place the limitation is visible without
+/// opening anything: a user whose model cannot see the screen has no other passive
+/// reminder, and the alternative is discovering it from an answer that declines to
+/// look.
+pub fn tooltip_for(model: Option<&str>, tier: Option<Tier>) -> String {
+    match (model, tier) {
+        (Some(model), Some(tier)) => format!("Magi — {model} · {}", tier.label()),
+        // Selected but never probed. Naming the model is still useful, and claiming
+        // a capability would not be.
+        (Some(model), None) => format!("Magi — {model} · not tested"),
+        _ => TOOLTIP_UNTESTED.to_string(),
+    }
+}
+
+/// Updates the tray tooltip to match the active model.
+///
+/// A failure is logged rather than returned. A stale tooltip is a cosmetic problem,
+/// and there is no useful way for a caller mid-way through saving a setting to
+/// react to one.
+pub fn refresh_tooltip(app: &tauri::AppHandle, model: Option<&str>, tier: Option<Tier>) {
+    let Some(tray) = app.tray_by_id("main") else {
+        return;
+    };
+
+    if let Err(error) = tray.set_tooltip(Some(tooltip_for(model, tier))) {
+        tracing::warn!(%error, "could not update the tray tooltip");
+    }
 }
 
 /// Tray callbacks cannot return a `Result`, and a panic here would take down a
@@ -122,6 +159,44 @@ fn log_if_err(action: &str, result: Result<(), ShellError>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_tooltip_names_the_model_and_its_capability() {
+        assert_eq!(
+            tooltip_for(Some("llava"), Some(Tier::Heuristic)),
+            "Magi — llava · Assisted capture"
+        );
+        assert_eq!(
+            tooltip_for(Some("gpt-5"), Some(Tier::Agentic)),
+            "Magi — gpt-5 · Agentic capture"
+        );
+    }
+
+    #[test]
+    fn an_untested_model_is_named_without_claiming_a_capability() {
+        // Selected but never probed. The name is still useful; a capability would
+        // be a claim nothing has verified.
+        assert_eq!(
+            tooltip_for(Some("llama3.2"), None),
+            "Magi — llama3.2 · not tested"
+        );
+    }
+
+    #[test]
+    fn no_model_selected_says_so() {
+        assert_eq!(tooltip_for(None, None), TOOLTIP_UNTESTED);
+        // A tier with no model is nonsense; it must not render as a capability.
+        assert_eq!(tooltip_for(None, Some(Tier::Agentic)), TOOLTIP_UNTESTED);
+    }
+
+    #[test]
+    fn the_text_only_tier_is_visible_in_the_tooltip() {
+        // The whole reason the tier is here: a model that cannot see the screen has
+        // no other passive reminder, and the alternative is finding out from an
+        // answer that declines to look.
+        let tooltip = tooltip_for(Some("llama3.2"), Some(Tier::TextOnly));
+        assert!(tooltip.contains("Text only"), "got: {tooltip}");
+    }
 
     #[test]
     fn idle_and_panel_open_share_the_base_icon() {

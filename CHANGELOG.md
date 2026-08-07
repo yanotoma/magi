@@ -6,6 +6,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+Magi now checks what a model can do before relying on it.
+
+### Added
+- **Capability testing.** Settings → Models shows a matrix per provider: can Magi reach it, can the model read an image, does it call tools properly, does it return valid JSON. Press *Test* on any model to find out; press *Re-test* after changing anything
+- Each model gets a capability label — *Agentic capture*, *Assisted capture*, *Text only* or *Unreachable* — with a plain-language explanation of what that means and what to do about it
+- The tray tooltip names the active model and its capability, so a model that cannot see your screen says so without opening anything
+- Answers are now tailored to what the model can do. A model that cannot see the screen is told so, and stops offering to look
+- Results are remembered in `capabilities.json` next to `config.toml`, so testing happens once rather than on every launch. Deleting that file forces a re-test, and saving a provider clears its results — capabilities belong to the endpoint as much as to the model
+
+### Changed
+- Untested models are shown as untested rather than as unsupported. Nobody has asked them yet, which is not the same as a refusal
+
 ## [0.2.0-alpha.1] - 2026-08-07
 
 Magi answers for the first time.
