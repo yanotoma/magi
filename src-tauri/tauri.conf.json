@@ -36,8 +36,10 @@
         "label": "settings",
         "title": "Magi Settings",
         "url": "/settings/",
-        "width": 720,
-        "height": 560,
+        "width": 900,
+        "height": 700,
+        "minWidth": 640,
+        "minHeight": 480,
         "resizable": true,
         "visible": false,
         "center": true

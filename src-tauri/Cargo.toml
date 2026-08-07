@@ -1,6 +1,6 @@
 [package]
 name = "magi"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 description = "A background AI agent for your desktop"
 authors = ["The Magi contributors"]
 license = "Apache-2.0"
@@ -42,6 +42,15 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # API keys live in the OS keychain, never in config.toml.
 keyring = { version = "3", features = ["apple-native"] }
+# The pre-flight vision probe generates a PNG containing a known digit. Hand-rolling
+# the encoder was the alternative — tools/generate_tray_icon.py already does it in
+# Python — and was rejected: a subtly malformed PNG would be accepted by the HTTP
+# layer and misread by every model, reported to the user as "this model cannot see".
+# That is the most expensive misdiagnosis this module can produce, and verifying a
+# hand-rolled encoder would need a decoder, which is circular.
+png = { version = "0.17", default-features = false }
+# Both families send images base64-encoded; they disagree only on the wrapper.
+base64 = "0.22"
 thiserror = "2"
 toml = "0.8"
 tracing = "0.1"

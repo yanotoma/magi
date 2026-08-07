@@ -66,6 +66,19 @@ pub fn run() {
 
             let theme = config.appearance.theme;
             let shortcut = config.hotkey.toggle.clone();
+            let active = config.active.clone();
+
+            // Probe results, if any exist. Infallible: a missing or unreadable file
+            // means nothing has been probed yet, which is an ordinary first-run
+            // state rather than a failure to report.
+            let capabilities = crate::llm::cache::CapabilityCache::load(&config_dir);
+
+            // Read before the cache is moved into the state, so the tray shows the
+            // right thing from the first hover rather than only after something
+            // changes.
+            let startup_tier = active
+                .as_ref()
+                .and_then(|a| capabilities.tier(&a.provider, &a.model));
 
             app.manage(AppState {
                 http: reqwest::Client::new(),
@@ -73,12 +86,19 @@ pub fn run() {
                 config_dir,
                 secrets: std::sync::Arc::new(KeyringStore),
                 key_hints: Mutex::new(std::collections::HashMap::new()),
+                capabilities: Mutex::new(capabilities),
                 in_flight: Mutex::new(None),
             });
 
             commands::apply_theme(app.handle(), theme);
 
             tray::init(app)?;
+
+            tray::refresh_tooltip(
+                app.handle(),
+                active.as_ref().map(|a| a.model.as_str()),
+                startup_tier,
+            );
 
             // The configured shortcut, not the default one. Registering the
             // default here would ignore the field the user just set in Settings,
@@ -101,6 +121,7 @@ pub fn run() {
             commands::remove_provider,
             commands::set_active_model,
             commands::discover_models,
+            commands::run_preflight,
             commands::set_theme,
             commands::set_show_thinking,
             commands::set_prompt_context,

@@ -3,9 +3,9 @@
 Complete breakdown of what is done and what is pending, across every milestone.
 
 **Last updated:** 2026-08-07
-**Current phase:** M3 — pre-flight and capability tiers, targeting `0.2.0-alpha.2`
-**Current version:** `0.2.0-alpha.1` (released — see [VERSIONING.md](VERSIONING.md))
-**Overall:** 57 / 143 tasks done (40%)
+**Current phase:** M4 — audio and speech-to-text, targeting `0.3.0-alpha.1`
+**Current version:** `0.2.0-alpha.2` (released — see [VERSIONING.md](VERSIONING.md))
+**Overall:** 71 / 144 tasks done (49%)
 
 Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 
@@ -17,13 +17,13 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 |---|---|---|---:|---:|---|
 | **M0** | Foundations | — | 15 | 15 | ✅ Complete |
 | **M1** | Shell — tray, hotkey, windows | `0.1.0-alpha.1` | 15 | 16 | ✅ Shipped |
-| **M2** | Config & providers | `0.2.0-alpha.1` | 27 | 27 | ✅ Shipped |
-| **M3** | Pre-flight & capability tiers | `0.2.0-alpha.2` | 0 | 14 | 🔨 Next |
-| **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 0 | 14 | ⬜ |
+| **M2** | Config & providers | `0.2.0-alpha.1` | 28 | 28 | ✅ Shipped |
+| **M3** | Pre-flight & capability tiers | `0.2.0-alpha.2` | 13 | 14 | ✅ Shipped |
+| **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 0 | 14 | 🔨 Next |
 | **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 0 | 13 | ⬜ |
 | **M6** | Session machine & panel UX | `0.5.0-beta.1` | 0 | 16 | ⬜ |
 | **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 14 | ⬜ |
-| — | **v1 total** | `1.0.0` | **57** | **129** | |
+| — | **v1 total** | `1.0.0` | **71** | **130** | |
 | **M8** | v2 — wake word & TTS | `1.1.0` | 0 | 9 | 🔮 Post-v1 |
 | **M9** | v3 — computer use | `1.2.0` | 0 | 5 | 🔮 Post-v1 |
 
@@ -117,7 +117,8 @@ Three bugs the milestone only surfaced when run, all worth keeping in mind:
 - [x] Cancellation — dismissing the panel, pressing Stop, or asking again aborts the in-flight task, which drops the receiver and stops the provider
 - [x] Panel: text input and streaming answer, growing to a max height then scrolling
 - [x] Inline errors naming the provider and the resolved URL — "connection refused" is useless without knowing what it tried to reach
-- [x] Settings UI — provider list with add / edit / remove
+- [x] Settings UI — provider list with add / edit / remove, behind an *Add a provider* button rather than a form permanently occupying the page
+- [x] Model picker with search, so discovery proposes rather than decides. Fetching from an endpoint no longer selects everything it returns: OpenRouter and AI Studio answer with hundreds, and taking all of them would fill the provider card and the capability matrix with models nobody asked for. The user chooses; search exists because scrolling three hundred rows is not a way to find anything
 - [x] Render answers as markdown — bold, lists, tables, code. Models emit markdown whether or not it is asked for, so plain text does not mean "no formatting", it means showing `**weather.com**` with the asterisks. Rendered with raw HTML disabled at the parser rather than sanitised afterwards, images disabled (a model-chosen image URL is a read-receipt beacon), and links rendered as non-navigable text next to their real destination — this panel is the app's own webview, so following a link would replace Magi's UI with no way back
 - [x] Settings UI — hotkey capture control. Records from `event.code`, not `event.key`: `key` reports what the layout *produces*, so Alt+A is "å" on macOS and a stored binding would depend on the layout at the moment it was recorded. Validation runs before the old shortcut is released and the old one is restored if the OS refuses the new one, so a failed attempt never leaves a background app with no way in
 - [x] `[prompt] context` in `config.toml` — free text appended to Magi's system prompt. **Additive, never a replacement**: Magi's own instructions carry the contract that makes agentic capture fire, and letting a user overwrite them breaks tier 1 silently. Enforced by a single `system_prompt()` with no branch that omits Magi's half, and a test asserting no input — hostile ones included — can produce a prompt not led by it
@@ -126,21 +127,29 @@ Three bugs the milestone only surfaced when run, all worth keeping in mind:
 
 ---
 
-## M3 — Pre-flight & capability tiers
+## M3 — Pre-flight & capability tiers ✅
 
-- [ ] `llm::preflight` module scaffolding
-- [ ] Probe 1 — reachability, distinguishing bad URL / bad key / model not pulled
-- [ ] Probe 2 — vision, using a generated image with a known digit
-- [ ] Probe 3 — tool-calling, validating a well-formed call rather than non-empty output
-- [ ] Probe 4 — structured output against a small JSON schema
-- [ ] Tier assignment logic from probe results
-- [ ] Cache results per provider + model
-- [ ] Unit tests for tier assignment across every probe-result combination
-- [ ] Settings UI — capability matrix per provider
-- [ ] Settings UI — *Re-test* button with progress
-- [ ] Surface the active tier in the tray tooltip
-- [ ] `llm::prompt` — assemble messages from `(tier, config, history)` rather than from a constant. The prompt is tier-dependent: tier 1 needs instructions on when to call `capture_screen`; tier 2 must not be told about tools at all, since the harness captures ahead of it by heuristic and mentioning tools only invites malformed tool syntax in prose; tier 3 needs to know it cannot see the screen so it stops promising to look
-- [ ] Unit tests for prompt assembly per tier — pure logic, no network
+Manually verified on macOS against Xiaomi MiMo: `mimo-v2.5` probes to *Agentic capture* (reads the test image, calls the tool, declines the JSON schema) while `mimo-v2.5-pro` on the same endpoint and key probes to *Text only*. Per-model tiers on one provider is exactly why results are keyed by model.
+
+One task is carried rather than done — the degraded tray icon, below. It is a design problem that needs looking at in a real menu bar, not a coding one.
+
+Two bugs the milestone only surfaced when run, both worth remembering:
+- The vision probe reported a sighted model as blind, because the generated seven-segment digit had unfilled corners and rendered as two detached strokes. The model read it correctly and answered `1`. Ten tests passed; what found it was rendering the PNG and looking at it. Legibility is not directly testable — connectivity is, and a flood fill now asserts every digit is one connected shape.
+- Probes were given 256 tokens on the reasoning that they only need a word. Thinking tokens are billed whether or not the limit fits them, so a tight limit truncates the answer rather than avoiding its cost, and an empty reply reads as a failed capability.
+
+- [x] `llm::preflight` module scaffolding — verdict functions pure and separate from the async orchestration, so every way a model can almost-pass is a unit test
+- [x] Probe 1 — reachability, distinguishing bad URL / bad key / model not pulled. A trivial completion rather than `GET /v1/models`: a provider can list a model it cannot serve, and the Anthropic-shaped endpoints have no listing route
+- [x] Probe 2 — vision, using a generated seven-segment `7`. Fails a confident description with no digit in it, which is what an endpoint that accepted the payload and ignored it produces — and fails a denial that happens to guess right, since a lucky guess must not promote a blind model
+- [x] Probe 3 — tool-calling, validating a well-formed call rather than non-empty output. Also rejects a call with an empty argument object and a call to a tool never offered: structurally valid is not the same as usable
+- [x] Probe 4 — structured output against a small JSON schema. Accepts a fenced code block, rejects prose around the JSON and `"celsius": "21"` — a schema half-followed is not schema support
+- [x] Tier assignment logic from probe results. Total function, no fallback branch. `Unreachable` is its own tier: a text-only model works and an unreachable one does not, and the fixes are unrelated
+- [x] Cache results per provider + model in `capabilities.json`, **not** `config.toml` — that file is a contract surface the user hand-edits, and probe results are derived, disposable, and meaningless to write by hand. Cleared whenever a provider is saved, since capabilities belong to the endpoint as much as the model
+- [x] Unit tests for tier assignment across every probe-result combination — all sixteen, as a table, so adding a capability forces the list to be revisited
+- [x] Settings UI — capability matrix per provider. Three states per cell, not two: an untested model shows a dash, because "untested" and "failed" are different claims and only one is Magi's to make. Every cell explains what was actually sent and what the outcome means — a column headed "JSON" makes a cross look arbitrary, when the measured fact is narrower and more useful: a schema was sent and the reply did not match it
+- [x] Settings UI — *Test* / *Re-test* per model, one at a time. Concurrent probes against a metered API can trip a rate limit, which would be recorded as a capability the model lacks
+- [x] Surface the active tier in the tray tooltip — the only passive reminder a user gets that their model cannot see the screen
+- [x] `llm::prompt` — assemble messages from `(tier, config, history)` rather than from a constant. The prompt is tier-dependent: tier 1 needs instructions on when to call `capture_screen`; tier 2 must not be told about tools at all, since the harness captures ahead of it by heuristic and mentioning tools only invites malformed tool syntax in prose; tier 3 needs to know it cannot see the screen so it stops promising to look
+- [x] Unit tests for prompt assembly per tier — pure logic, no network. Includes an attempt to displace Magi's instructions from all four tiers with hostile context values
 - [ ] Design the degraded tray icon. A cancel slash across three separated nodes does not read at 22pt — the mark is discontinuous, so the bar alternates between empty space and ring and every crossing forces a choice between eating the ring and breaking the bar. Needs a different idea, looked at in a real menu bar
 
 ---

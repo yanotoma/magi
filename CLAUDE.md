@@ -36,7 +36,9 @@ Check documentation with the context7 MCP server rather than recalled knowledge 
 - **API keys never touch `config.toml`.** They live in the OS keychain via `keyring`, so users can safely paste configs into bug reports.
 - **Adding a plugin means adding its capability permissions in the same commit.** A registered Tauri v2 plugin missing from a capability file fails at runtime, not compile time.
 - **Arrow functions** in all JavaScript and TypeScript.
+- **Styling goes through the tokens in `src/app.css`.** No ad-hoc `color-mix`, radius literal, or one-off opacity in a component. There is no CSS methodology here and none is wanted — Svelte scopes classes per component, so BEM solves a problem the compiler already solved, and a utility framework would replace the CSS system colours (`Canvas`, `CanvasText`, `AccentColor`) that make Light/Dark/System follow the OS with no JavaScript. What the tokens prevent is the drift that actually happened: two settings panes reached fourteen different greys and ten border radii because every rule invented its own. The panel window is the documented exception — it composites over an arbitrary desktop, so its contrast cannot derive from `Canvas`.
 - **No Claude attribution in commit messages.**
+- **Run `tools/verify.sh` before committing, and never summarise a test run by hand.** Piping `cargo test` through `grep '^test result' | awk '{sum += $4}'` counts the passing tests of a *failing* target, because `test result: FAILED. 205 passed;` starts with the same words and keeps the count in the same column. A broken suite reads as a slightly lower total. Five failing tests were committed and pushed on the strength of that number. The script pipes nothing and lets exit statuses propagate.
 
 ## Architecture invariant
 

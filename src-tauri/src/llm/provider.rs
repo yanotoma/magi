@@ -97,12 +97,148 @@ pub enum LlmError {
     MalformedResponse { url: String, reason: String },
 }
 
-/// One turn in, events out.
+/// A PNG to send to the model, as raw bytes.
+///
+/// Bytes and a media type rather than an encoded string, because the two families
+/// encode it differently — one wants a `data:` URL, the other a bare base64
+/// payload beside a `media_type` field. Encoding here would pick a side.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Image {
+    pub media_type: &'static str,
+    pub bytes: Vec<u8>,
+}
+
+impl Image {
+    pub fn png(bytes: Vec<u8>) -> Self {
+        Self {
+            media_type: "image/png",
+            bytes,
+        }
+    }
+}
+
+/// A tool offered to the model, in neutral terms.
+///
+/// `parameters` is a JSON Schema value. Both families take a schema; they disagree
+/// only on the key it sits under and on how much wrapping goes around it, which is
+/// each implementation's problem rather than this type's.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolSpec {
+    pub name: String,
+    pub description: String,
+    pub parameters: serde_json::Value,
+}
+
+/// A tool call the model actually made.
+///
+/// `arguments` is parsed JSON, not a string. A string here would invite callers to
+/// match on substrings, and the whole point of the tool probe is distinguishing a
+/// structurally valid call from prose that talks about calling something.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolCall {
+    pub name: String,
+    pub arguments: serde_json::Value,
+}
+
+/// A single non-streaming request, used by pre-flight.
+///
+/// Separate from [`TurnRequest`] rather than an extension of it, because the two
+/// have opposite requirements. A turn streams, carries history, and never sends
+/// tool definitions in v1. A probe sends exactly one message, wants the whole
+/// reply at once, and exists to attach precisely the one thing being tested.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProbeRequest {
+    pub model: String,
+    pub system: Option<String>,
+    pub prompt: String,
+
+    /// Attached when the vision probe runs.
+    pub image: Option<Image>,
+
+    /// Offered when the tool probe runs.
+    pub tool: Option<ToolSpec>,
+
+    /// Requested when the structured-output probe runs.
+    pub json_schema: Option<serde_json::Value>,
+
+    pub max_tokens: u32,
+}
+
+impl ProbeRequest {
+    /// A text-only probe. The three capability probes add one thing each.
+    pub fn new(model: impl Into<String>, prompt: impl Into<String>) -> Self {
+        Self {
+            model: model.into(),
+            system: None,
+            prompt: prompt.into(),
+            image: None,
+            tool: None,
+            json_schema: None,
+            max_tokens: PROBE_MAX_TOKENS,
+        }
+    }
+}
+
+/// The token limit for a probe.
+///
+/// Generous, and the first version of this was not — it was 256, on the reasoning
+/// that every probe wants a word or a short object so a bigger limit would only pay
+/// for a model that likes to explain itself.
+///
+/// That reasoning is backwards for a reasoning model, which is most of the
+/// interesting ones. Thinking tokens are generated and billed whether or not the
+/// limit accommodates them, so a tight `max_tokens` does not avoid the cost — it
+/// truncates the answer that cost was spent producing. Set to 256, a model that
+/// thinks for three hundred tokens about a picture of a `7` returns empty content,
+/// and the vision verdict reads that as "did not see the image".
+///
+/// So the cheap-looking limit was the expensive one: it reported the most capable
+/// models as the least capable. This is sized to leave room for thinking plus a
+/// short answer.
+pub const PROBE_MAX_TOKENS: u32 = 2048;
+
+// A compile-time floor rather than a test. Lowering this below the room a reasoning
+// model needs is the specific mistake that reported vision-capable models as blind,
+// and a build error catches it at the moment someone tries rather than in a suite
+// they might not have run yet.
+const _: () = assert!(
+    PROBE_MAX_TOKENS >= 1024,
+    "thinking tokens are billed whether or not the limit fits them, so a tight probe \
+     budget truncates the answer that cost was spent producing instead of avoiding it"
+);
+
+/// What came back from a probe.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ProbeReply {
+    pub text: String,
+
+    /// Structurally parsed calls. Empty when the model produced none — including
+    /// when it described a call in prose, which is the case the tool probe exists
+    /// to catch.
+    pub tool_calls: Vec<ToolCall>,
+
+    /// Whether the reply stopped at the token limit rather than finishing.
+    ///
+    /// Recorded so that a probe which failed because the answer was cut off is
+    /// distinguishable from one that failed because the model got it wrong. Those
+    /// look identical in the verdict — both produce "no digit found" — but one is a
+    /// Magi problem and the other is a model limitation, and reporting the first as
+    /// the second is how a capable model gets marked incapable.
+    pub truncated: bool,
+}
+
+/// One turn in, events out; plus a single-shot probe for pre-flight.
 ///
 /// Events go through a channel rather than a returned stream so the caller can
 /// forward them to the UI as they arrive, and so cancellation is expressed by
 /// dropping the receiver — which is exactly what happens when the user
 /// dismisses the panel mid-answer.
+///
+/// `probe` is on this trait rather than beside it because the things it sends —
+/// an image, a tool definition, a schema — are formatted differently by each
+/// family, and that knowledge already lives in the implementations. Building probe
+/// payloads outside them would put wire formats in a second place and guarantee
+/// the two drift.
 #[async_trait]
 pub trait Provider: Send + Sync {
     async fn turn(
@@ -110,6 +246,10 @@ pub trait Provider: Send + Sync {
         request: TurnRequest,
         events: mpsc::Sender<StreamEvent>,
     ) -> Result<(), LlmError>;
+
+    /// One request, the whole reply. No streaming: nobody is watching a probe
+    /// arrive, so incremental delivery would be complexity for no reader.
+    async fn probe(&self, request: ProbeRequest) -> Result<ProbeReply, LlmError>;
 }
 
 /// A provider that replays a script.
@@ -120,6 +260,14 @@ pub trait Provider: Send + Sync {
 pub struct FakeProvider {
     script: Vec<StreamEvent>,
     failure: Option<LlmError>,
+
+    /// Replies handed out in order, one per `probe` call.
+    ///
+    /// A queue rather than one canned reply because pre-flight runs four probes
+    /// and the interesting cases are the mixed ones — a model that sees but cannot
+    /// call tools is the whole reason tier 2 exists, and testing it needs
+    /// different answers to consecutive probes.
+    probe_replies: std::sync::Mutex<std::collections::VecDeque<Result<ProbeReply, LlmError>>>,
 }
 
 impl FakeProvider {
@@ -127,6 +275,7 @@ impl FakeProvider {
         Self {
             script,
             failure: None,
+            probe_replies: std::sync::Mutex::new(std::collections::VecDeque::new()),
         }
     }
 
@@ -134,7 +283,15 @@ impl FakeProvider {
         Self {
             script: Vec::new(),
             failure: Some(error),
+            probe_replies: std::sync::Mutex::new(std::collections::VecDeque::new()),
         }
+    }
+
+    /// Queues the replies `probe` will return, in order.
+    pub fn answering_probes(mut replies: Vec<Result<ProbeReply, LlmError>>) -> Self {
+        let mut provider = Self::replaying(Vec::new());
+        provider.probe_replies = std::sync::Mutex::new(replies.drain(..).collect());
+        provider
     }
 }
 
@@ -158,6 +315,31 @@ impl Provider for FakeProvider {
         }
 
         Ok(())
+    }
+
+    async fn probe(&self, _request: ProbeRequest) -> Result<ProbeReply, LlmError> {
+        if let Some(error) = &self.failure {
+            return Err(error.clone());
+        }
+
+        let queued = self
+            .probe_replies
+            .lock()
+            .map_err(|_| LlmError::MalformedResponse {
+                url: "fake".into(),
+                reason: "the fake's reply queue was poisoned".into(),
+            })?
+            .pop_front();
+
+        // Running out of scripted replies is a test that asked for more probes than
+        // it prepared for, so it says so rather than returning something plausible
+        // that would make the test pass for the wrong reason.
+        queued.unwrap_or_else(|| {
+            Err(LlmError::MalformedResponse {
+                url: "fake".into(),
+                reason: "no probe reply was queued for this call".into(),
+            })
+        })
     }
 }
 

@@ -109,3 +109,5 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 ## License
 
 [Apache-2.0](LICENSE)
+
+Interface icons are from [Lucide](https://lucide.dev), used under the ISC license. Their notice travels with the paths in [`src/lib/Icon.svelte`](src/lib/Icon.svelte).
