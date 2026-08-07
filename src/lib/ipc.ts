@@ -34,6 +34,7 @@ export type Theme = "system" | "light" | "dark";
 
 export type AppearanceConfig = {
   theme: Theme;
+  show_thinking: boolean;
 };
 
 export type ConfigView = {
@@ -92,6 +93,10 @@ export const removeProvider = async (id: string): Promise<ConfigView> =>
  */
 export const setTheme = async (theme: Theme): Promise<ConfigView> =>
   invoke<ConfigView>("set_theme", { theme });
+
+/** Whether the panel shows the model's reasoning. */
+export const setShowThinking = async (show: boolean): Promise<ConfigView> =>
+  invoke<ConfigView>("set_show_thinking", { show });
 
 export const setActiveModel = async (provider: string, model: string): Promise<ConfigView> =>
   invoke<ConfigView>("set_active_model", { provider, model });
@@ -179,11 +184,13 @@ export const cancelTurn = async (): Promise<void> => invoke("cancel_turn");
  */
 export const onTurnEvents = async (handlers: {
   token: (token: string) => void;
+  thinking: (thought: string) => void;
   done: (notice: string | null) => void;
   error: (message: string) => void;
 }): Promise<UnlistenFn> => {
   const unlisten = await Promise.all([
     listen<string>("magi://token", (e) => handlers.token(e.payload)),
+    listen<string>("magi://thinking", (e) => handlers.thinking(e.payload)),
     listen<string | null>("magi://turn-done", (e) => handlers.done(e.payload)),
     listen<string>("magi://error", (e) => handlers.error(e.payload)),
   ]);

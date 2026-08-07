@@ -335,6 +335,17 @@ You are Magi, a desktop assistant. Your answer appears in a small overlay panel,
 so be brief and lead with the answer. Skip preamble and restatement. Use plain \
 prose; reach for a short list only when the answer really is a list.";
 
+/// Turns the reasoning display on or off.
+#[tauri::command]
+pub fn set_show_thinking(state: State<'_, AppState>, show: bool) -> CommandResult<ConfigView> {
+    {
+        let mut config = state.config.lock().map_err(to_message)?;
+        config.appearance.show_thinking = show;
+        config.save(&state.config_dir).map_err(to_message)?;
+    }
+    get_config(state)
+}
+
 /// Sends one text turn and streams the reply back as events.
 ///
 /// Returns as soon as the request is under way. The reply arrives on
@@ -398,6 +409,10 @@ pub async fn send_text_turn(
             while let Some(event) = rx.recv().await {
                 let emitted = match event {
                     StreamEvent::Token(token) => app.emit("magi://token", token),
+                    // Always emitted; the panel decides whether to show it. The
+                    // channel is in-process, so the cost of sending it when it is
+                    // hidden is not worth a round trip to read a setting here.
+                    StreamEvent::Thinking(thought) => app.emit("magi://thinking", thought),
                     StreamEvent::Done(reason) => app.emit("magi://turn-done", describe(&reason)),
                 };
                 if let Err(error) = emitted {

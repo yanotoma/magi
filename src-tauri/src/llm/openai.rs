@@ -81,6 +81,18 @@ pub fn parse_frame(frame: &SseFrame) -> Option<StreamEvent> {
         return Some(StreamEvent::Token(content.to_string()));
     }
 
+    // Reasoning models in this family put their working in `reasoning_content`
+    // (the DeepSeek convention, adopted by MiMo and others) or `reasoning`.
+    // Neither is in OpenAI's own spec, which is why both are checked.
+    if let Some(reasoning) = choice.get("delta").and_then(|d| {
+        d.get("reasoning_content")
+            .or_else(|| d.get("reasoning"))
+            .and_then(|r| r.as_str())
+            .filter(|r| !r.is_empty())
+    }) {
+        return Some(StreamEvent::Thinking(reasoning.to_string()));
+    }
+
     match choice.get("finish_reason").and_then(|r| r.as_str()) {
         Some("stop") => Some(StreamEvent::Done(StopReason::EndTurn)),
         Some("length") => Some(StreamEvent::Done(StopReason::MaxTokens)),
@@ -303,6 +315,38 @@ mod tests {
         assert_eq!(
             parse_frame(&frame(r#"{"choices":[{"delta":{"role":"assistant"}}]}"#)),
             None
+        );
+    }
+
+    #[test]
+    fn reasoning_content_becomes_a_thinking_event_not_a_token() {
+        // DeepSeek's convention, which MiMo and others follow. Emitting it as a
+        // Token would print the model's working as though it were the answer.
+        assert_eq!(
+            parse_frame(&frame(
+                r#"{"choices":[{"delta":{"reasoning_content":"let me think"}}]}"#
+            )),
+            Some(StreamEvent::Thinking("let me think".into()))
+        );
+    }
+
+    #[test]
+    fn the_reasoning_field_is_also_accepted() {
+        // Neither spelling is in OpenAI's own spec, so both are checked.
+        assert_eq!(
+            parse_frame(&frame(r#"{"choices":[{"delta":{"reasoning":"hmm"}}]}"#)),
+            Some(StreamEvent::Thinking("hmm".into()))
+        );
+    }
+
+    #[test]
+    fn content_wins_over_reasoning_when_a_frame_carries_both() {
+        // The answer must never be delayed behind reasoning that arrived with it.
+        assert_eq!(
+            parse_frame(&frame(
+                r#"{"choices":[{"delta":{"reasoning_content":"hmm","content":"Hi"}}]}"#
+            )),
+            Some(StreamEvent::Token("Hi".into()))
         );
     }
 

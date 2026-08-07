@@ -114,6 +114,13 @@ pub enum Theme {
 #[serde(deny_unknown_fields, default)]
 pub struct AppearanceConfig {
     pub theme: Theme,
+
+    /// Whether the panel shows the model's reasoning.
+    ///
+    /// Off by default: most models emit none, and for those that do the working
+    /// is longer than the answer and would bury it.
+    #[serde(default)]
+    pub show_thinking: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -281,6 +288,13 @@ mod tests {
     #[test]
     fn theme_defaults_to_following_the_system() {
         assert_eq!(Config::default().appearance.theme, Theme::System);
+    }
+
+    #[test]
+    fn reasoning_is_hidden_by_default() {
+        // Most models emit none, and where they do the working is longer than the
+        // answer and would bury it.
+        assert!(!Config::default().appearance.show_thinking);
     }
 
     #[test]

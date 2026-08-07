@@ -95,6 +95,7 @@ pub fn run() {
             commands::set_active_model,
             commands::discover_models,
             commands::set_theme,
+            commands::set_show_thinking,
             commands::send_text_turn,
             commands::cancel_turn,
         ])

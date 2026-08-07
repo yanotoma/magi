@@ -60,6 +60,14 @@ pub enum StopReason {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamEvent {
     Token(String),
+
+    /// The model's reasoning, kept separate from the answer.
+    ///
+    /// A separate variant rather than more `Token`s because the two must be
+    /// displayable independently: merged, the user would read the working as
+    /// though it were the conclusion. Not every model emits it.
+    Thinking(String),
+
     Done(StopReason),
 }
 
@@ -196,6 +204,9 @@ mod tests {
         while let Some(event) = rx.recv().await {
             match event {
                 StreamEvent::Token(t) => tokens.push_str(&t),
+                // Reasoning is collected separately; a test that folded it into
+                // `tokens` would pass while the panel mixed the two.
+                StreamEvent::Thinking(_) => {}
                 StreamEvent::Done(_) => finished = true,
             }
         }

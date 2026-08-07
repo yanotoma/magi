@@ -109,14 +109,20 @@ pub fn parse_frame(frame: &SseFrame) -> Option<StreamEvent> {
     match parsed.get("type").and_then(|t| t.as_str())? {
         "content_block_delta" => {
             let delta = parsed.get("delta")?;
-            // Only text is the answer. `thinking_delta` is the model's working,
-            // and streaming it into the panel would present reasoning as the reply.
+            // Text is the answer; thinking is the working. They travel as
+            // different events so the panel can show them as different things —
+            // or hide one — rather than running them together.
             match delta.get("type").and_then(|t| t.as_str())? {
                 "text_delta" => delta
                     .get("text")
                     .and_then(|t| t.as_str())
                     .filter(|t| !t.is_empty())
                     .map(|t| StreamEvent::Token(t.to_string())),
+                "thinking_delta" => delta
+                    .get("thinking")
+                    .and_then(|t| t.as_str())
+                    .filter(|t| !t.is_empty())
+                    .map(|t| StreamEvent::Thinking(t.to_string())),
                 _ => None,
             }
         }
@@ -335,14 +341,15 @@ mod tests {
     }
 
     #[test]
-    fn a_thinking_delta_is_not_emitted_as_an_answer() {
-        // Reasoning is not the reply. Streaming it into the panel would show the
-        // user the model's working as though it were the answer.
+    fn a_thinking_delta_is_a_thinking_event_not_a_token() {
+        // Reasoning is not the reply, but it is worth showing separately. As a
+        // Token it would read as the answer; as its own event the panel can put
+        // it behind a disclosure or drop it.
         let event = parse_frame(&frame(
             "content_block_delta",
             r#"{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"hmm"}}"#,
         ));
-        assert_eq!(event, None);
+        assert_eq!(event, Some(StreamEvent::Thinking("hmm".into())));
     }
 
     #[test]

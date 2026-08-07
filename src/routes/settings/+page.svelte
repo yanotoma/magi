@@ -5,6 +5,7 @@
     removeProvider,
     setActiveModel,
     setTheme,
+    setShowThinking,
     discoverModels,
     PRESETS,
     type ConfigView,
@@ -173,6 +174,20 @@
         {/each}
       </div>
       <p class="hint">System follows macOS and changes with it.</p>
+
+      <h2 class="spaced">Panel</h2>
+      <label class="checkbox">
+        <input
+          type="checkbox"
+          checked={config?.appearance.show_thinking ?? false}
+          onchange={(e) => run(() => setShowThinking(e.currentTarget.checked))}
+        />
+        Show the model's reasoning
+      </label>
+      <p class="hint">
+        Only some models produce any. Where they do it is usually longer than the
+        answer, so it appears behind a disclosure rather than inline.
+      </p>
 
       {#if config}
         <h2 class="spaced">Configuration file</h2>
