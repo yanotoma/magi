@@ -21,6 +21,8 @@ Magi now checks what a model can do before relying on it.
 - Fetching a provider's models now proposes them instead of selecting them all. Pick the ones you want, with a search box for endpoints that serve hundreds
 - Provider cards fold away, and show their model count when folded
 - The Settings window opens larger, and model names no longer wrap
+- Adding or editing a provider now fills the whole screen instead of sharing it with the provider list
+- Consistent styling across the Settings screens: sections are separated by rules rather than some panes using bordered cards and others nothing
 
 ## [0.2.0-alpha.1] - 2026-08-07
 

@@ -15,6 +15,65 @@
 }
 
 /*
+  Design tokens.
+
+  Not a methodology — no BEM, no utility classes. Svelte already scopes every class
+  per component, so BEM's whole purpose is served by the compiler, and a utility
+  framework would replace the CSS system colours below with a fixed palette, which
+  is exactly what makes Light/Dark/System follow the OS here with no JavaScript.
+
+  What was actually missing is this: shared values. Before these existed the two
+  settings panes had drifted into fourteen different greys — from `Canvas 50%` to
+  `Canvas 94%` — and ten border radii, because every rule invented its own. The
+  inconsistency was not a matter of discipline; there was nothing to be consistent
+  with.
+
+  Everything derives from the system colours rather than from literals, so a token
+  still follows the OS theme.
+*/
+:root {
+  /* Separators and outlines. Three weights: a hairline between rows, a visible
+     edge for inputs, and a strong one for focus and emphasis. */
+  --line: color-mix(in srgb, Canvas 88%, CanvasText 12%);
+  --line-edge: color-mix(in srgb, Canvas 76%, CanvasText 24%);
+  --line-strong: color-mix(in srgb, Canvas 55%, CanvasText 45%);
+
+  /* The ring around a control that is armed and waiting for input. */
+  --focus-ring: color-mix(in srgb, AccentColor 25%, transparent);
+
+  /* Surfaces. Used sparingly: the settings screens separate with lines rather than
+     boxes, so these are for interaction states, not for grouping. */
+  --surface-raised: color-mix(in srgb, Canvas 96%, CanvasText 4%);
+  --surface-hover: color-mix(in srgb, Canvas 92%, CanvasText 8%);
+  --surface-active: color-mix(in srgb, Canvas 92%, AccentColor 8%);
+
+  /* Three radii rather than ten. Controls, containers, and the overlay panel. */
+  --radius-control: 5px;
+  --radius-container: 8px;
+  --radius-panel: 14px;
+
+  /* Opacity for secondary text, so "dimmer" means one thing across the app. */
+  --muted: 0.55;
+  --muted-strong: 0.75;
+
+  /* A spacing scale. Vertical rhythm on these screens is mostly one of these four. */
+  --gap-xs: 4px;
+  --gap-sm: 8px;
+  --gap-md: 14px;
+  --gap-lg: 22px;
+
+  /* Status tones, for capability tiers and badges.
+     Mixed into Canvas at one strength so a tone reads the same wherever it is used —
+     these had drifted too, with green at 30% next to seagreen at 18% and crimson at
+     both 18% and 28%, which made the same meaning look like two different ones.
+     Always paired with a written label; colour never carries the meaning alone. */
+  --tone-good: color-mix(in srgb, Canvas 76%, seagreen 24%);
+  --tone-warn: color-mix(in srgb, Canvas 76%, goldenrod 24%);
+  --tone-bad: color-mix(in srgb, Canvas 76%, crimson 24%);
+  --tone-neutral: color-mix(in srgb, Canvas 84%, CanvasText 16%);
+}
+
+/*
   The panel window is transparent at the OS level. If html or body paint a
   background, that transparency is invisible — the page simply covers it. Each
   route draws its own surface instead.

@@ -196,6 +196,13 @@
 </div>
 
 <style>
+  /* The panel does not use the design tokens in app.css, and should not.
+     Those derive from the CSS system colours so the settings window follows the OS
+     theme. This window is a translucent overlay composited over whatever is on the
+     desktop, so its contrast has to hold against an arbitrary wallpaper rather than
+     against Canvas — which is why the values here are fixed rather than derived.
+     Unifying them would make the panel legible only when the desktop happens to
+     match the system theme. */
   .panel {
     /* A light scrim over the OS material: enough to hold text contrast against a
        bright desktop, not so much that it defeats the blur underneath.

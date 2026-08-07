@@ -557,21 +557,19 @@
     {/if}
 
     {#if pane === "models"}
-      <div class="section-head">
-        <h2>Providers</h2>
-        {#if !formOpen}
-          <button type="button" class="primary" onclick={addProvider}>Add a provider</button>
-        {/if}
-      </div>
-
       <!--
-        The form renders above the list rather than below it. It is the active task
-        when it is open, and putting it after a list of providers means clicking Edit
-        scrolls the thing you are editing off screen.
+        The form replaces the list rather than joining it. They are separate tasks —
+        configuring an endpoint, and reading what its models can do — and showing both
+        at once leaves the form as a narrow column beside a table it has nothing to do
+        with. One screen, one job.
       -->
       {#if formOpen}
-        {@render providerForm()}
-      {/if}
+      {@render providerForm()}
+      {:else}
+      <div class="section-head">
+        <h2>Providers</h2>
+        <button type="button" class="primary" onclick={addProvider}>Add a provider</button>
+      </div>
 
       {#if !config || config.providers.length === 0}
         <p class="empty">No providers yet. Ollama needs no key and no account.</p>
@@ -744,14 +742,17 @@
           {/each}
         </ul>
       {/if}
-
+      {/if}
     {/if}
   </main>
 </div>
 
 {#snippet providerForm()}
   <form class="provider-form" onsubmit={submit}>
-    <h3>{editing ? `Edit ${editing}` : "New provider"}</h3>
+    <div class="form-head">
+      <h2>{editing ? `Edit ${editing}` : "New provider"}</h2>
+      <button type="button" onclick={closeForm}>Back to providers</button>
+    </div>
 
     {#if !editing}
       <label>
@@ -904,8 +905,8 @@
   }
 
   nav {
-    background: color-mix(in srgb, Canvas 92%, CanvasText 8%);
-    border-right: 1px solid color-mix(in srgb, Canvas 78%, CanvasText 22%);
+    background: var(--surface-hover);
+    border-right: 1px solid var(--line-edge);
     display: flex;
     flex-direction: column;
     gap: 1px;
@@ -916,14 +917,14 @@
     font-size: 10px;
     letter-spacing: 0.18em;
     margin: 0 0 14px 8px;
-    opacity: 0.45;
+    opacity: var(--muted);
     text-transform: uppercase;
   }
 
   .nav-item {
     background: none;
     border: none;
-    border-radius: 5px;
+    border-radius: var(--radius-control);
     color: CanvasText;
     cursor: pointer;
     font: inherit;
@@ -932,7 +933,7 @@
   }
 
   .nav-item:hover {
-    background: color-mix(in srgb, Canvas 84%, CanvasText 16%);
+    background: var(--line);
   }
 
   .nav-item.current {
@@ -955,18 +956,23 @@
     font-size: 11px;
     letter-spacing: 0.08em;
     margin: 0 0 10px;
-    opacity: 0.55;
+    opacity: var(--muted);
     text-transform: uppercase;
   }
 
+  /* A section break is a rule, everywhere. General and Hotkeys used whitespace
+     alone while Models used bordered cards — two different ideas of what a group
+     is, which is what made the screens look unrelated. */
   h2.spaced {
-    margin-top: 28px;
+    border-top: 1px solid var(--line);
+    margin-top: var(--gap-lg);
+    padding-top: var(--gap-lg);
   }
 
   .error {
-    background: color-mix(in srgb, Canvas 82%, crimson 18%);
+    background: var(--tone-bad);
     border-left: 3px solid crimson;
-    border-radius: 3px;
+    border-radius: var(--radius-control);
     margin: 0 0 18px;
     padding: 9px 12px;
   }
@@ -981,11 +987,11 @@
   }
 
   .segmented button:first-child {
-    border-radius: 5px 0 0 5px;
+    border-radius: var(--radius-control) 0 0 var(--radius-control);
   }
 
   .segmented button:last-child {
-    border-radius: 0 5px 5px 0;
+    border-radius: 0 var(--radius-control) var(--radius-control) 0;
   }
 
   .segmented button.selected {
@@ -994,19 +1000,25 @@
     color: AccentColorText;
   }
 
+  /* Separated by rules rather than boxed.
+     A bordered card draws a frame around content that already reads as a group, and
+     with several of them the frames become the loudest thing on the screen. A single
+     hairline says the same thing with one pixel. The first row needs no rule — there
+     is nothing above it to separate from. */
   .providers {
-    display: flex;
-    flex-direction: column;
-    gap: 9px;
     list-style: none;
     margin: 0;
     padding: 0;
   }
 
   .providers li {
-    border: 1px solid color-mix(in srgb, Canvas 76%, CanvasText 24%);
-    border-radius: 7px;
-    padding: 11px 13px;
+    border-top: 1px solid var(--line);
+    padding: var(--gap-md) 0;
+  }
+
+  .providers li:first-child {
+    border-top: none;
+    padding-top: var(--gap-xs);
   }
 
   .row {
@@ -1039,7 +1051,7 @@
 
   .twisty {
     font-size: 9px;
-    opacity: 0.5;
+    opacity: var(--muted);
     /* Fixed width so the name does not move by a character when folded. */
     width: 0.9em;
   }
@@ -1058,12 +1070,12 @@
     display: block;
     font-family: ui-monospace, monospace;
     font-size: 11px;
-    opacity: 0.6;
+    opacity: var(--muted);
   }
 
   .badge {
-    background: color-mix(in srgb, Canvas 80%, orange 20%);
-    border-radius: 3px;
+    background: var(--tone-warn);
+    border-radius: var(--radius-control);
     display: inline-block;
     font-family: ui-monospace, monospace;
     font-size: 10px;
@@ -1072,20 +1084,13 @@
   }
 
   .badge.ok {
-    background: color-mix(in srgb, Canvas 82%, seagreen 18%);
+    background: var(--tone-good);
   }
 
   .actions {
     display: flex;
     flex-shrink: 0;
     gap: 6px;
-  }
-
-  .models {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin-top: 10px;
   }
 
   /* The name as text, with no box of its own. As a filled pill the long ids these
@@ -1163,15 +1168,15 @@
   select,
   textarea {
     background: Field;
-    border: 1px solid color-mix(in srgb, Canvas 70%, CanvasText 30%);
-    border-radius: 5px;
+    border: 1px solid var(--line-edge);
+    border-radius: var(--radius-control);
     color: FieldText;
     font: inherit;
     padding: 5px 8px;
   }
 
   input[readonly] {
-    opacity: 0.6;
+    opacity: var(--muted);
   }
 
   textarea {
@@ -1181,8 +1186,8 @@
 
   button {
     background: ButtonFace;
-    border: 1px solid color-mix(in srgb, Canvas 70%, CanvasText 30%);
-    border-radius: 5px;
+    border: 1px solid var(--line-edge);
+    border-radius: var(--radius-control);
     color: ButtonText;
     cursor: pointer;
     font: inherit;
@@ -1191,12 +1196,12 @@
   }
 
   button:hover:not(:disabled) {
-    border-color: color-mix(in srgb, Canvas 50%, CanvasText 50%);
+    border-color: var(--line-strong);
   }
 
   button:disabled {
     cursor: default;
-    opacity: 0.45;
+    opacity: var(--muted);
   }
 
   button.primary {
@@ -1218,7 +1223,7 @@
   .hint,
   .hint-inline {
     font-size: 11px;
-    opacity: 0.55;
+    opacity: var(--muted);
   }
 
   .hint {
@@ -1231,12 +1236,12 @@
 
   .empty {
     margin: 0;
-    opacity: 0.7;
+    opacity: var(--muted-strong);
   }
 
   kbd {
-    background: color-mix(in srgb, Canvas 82%, CanvasText 18%);
-    border-radius: 4px;
+    background: var(--line);
+    border-radius: var(--radius-control);
     font-family: ui-monospace, monospace;
     padding: 2px 6px;
   }
@@ -1268,8 +1273,8 @@
     align-items: center;
     display: flex;
     justify-content: space-between;
-    /* The button sat directly on top of the first provider card. */
-    margin-bottom: 14px;
+    /* The button sat directly on top of the first provider row. */
+    margin-bottom: var(--gap-md);
   }
 
   .section-head h2 {
@@ -1278,20 +1283,31 @@
 
   /* The form reads as a card so it is visibly a separate task from the list of
      providers below it, rather than more of the same page. */
+  /* No card. It owns the whole pane now, so a frame would only inset it from the
+     window edge for no reason. */
   .provider-form {
-    background: color-mix(in srgb, Canvas 94%, CanvasText 6%);
-    border: 1px solid color-mix(in srgb, Canvas 80%, CanvasText 20%);
-    border-radius: 8px;
-    margin: 12px 0 4px;
-    padding: 12px 14px;
+    margin: 0;
+    width: 100%;
   }
 
-  .provider-form h3 {
-    font-size: 12px;
-    margin: 0 0 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    opacity: 0.6;
+  /* The picker is the one part that keeps an outline, because it scrolls: a
+     boundary is what tells you the list continues past what is shown. */
+  .provider-form .picker {
+    border-top: 1px solid var(--line);
+    margin-top: var(--gap-lg);
+    padding-top: var(--gap-md);
+  }
+
+  .form-head h2 {
+    margin: 0;
+  }
+
+  .form-head {
+    align-items: baseline;
+    display: flex;
+    gap: var(--gap-md);
+    justify-content: space-between;
+    margin-bottom: var(--gap-md);
   }
 
   .picker {
@@ -1346,8 +1362,8 @@
   /* Capped and scrolling. A provider that serves three hundred models must not make
      the settings window three hundred rows tall. */
   .model-list {
-    border: 1px solid color-mix(in srgb, Canvas 82%, CanvasText 18%);
-    border-radius: 5px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-control);
     list-style: none;
     margin: 8px 0 0;
     max-height: 15em;
@@ -1360,7 +1376,7 @@
   }
 
   .model-list li:hover {
-    background: color-mix(in srgb, Canvas 90%, CanvasText 10%);
+    background: var(--surface-hover);
   }
 
   .model-name {
@@ -1382,20 +1398,20 @@
 
   .matrix th {
     font-weight: 500;
-    opacity: 0.55;
-    padding: 3px 6px;
+    opacity: var(--muted);
+    padding: var(--gap-xs) var(--gap-sm);
     text-align: left;
     white-space: nowrap;
   }
 
   .matrix td {
-    border-top: 1px solid color-mix(in srgb, Canvas 88%, CanvasText 12%);
-    padding: 3px 6px;
+    border-top: 1px solid var(--line);
+    padding: var(--gap-xs) var(--gap-sm);
     vertical-align: middle;
   }
 
   .matrix tr.selected td {
-    background: color-mix(in srgb, Canvas 92%, AccentColor 8%);
+    background: var(--surface-active);
   }
 
   .mark {
@@ -1405,7 +1421,7 @@
   }
 
   .tier {
-    border-radius: 3px;
+    border-radius: var(--radius-control);
     padding: 1px 5px;
     white-space: nowrap;
   }
@@ -1414,28 +1430,28 @@
      label is always spelled out beside it, since a colour-only signal excludes
      anyone who cannot distinguish them and says nothing on a screenshot. */
   .tier.agentic {
-    background: color-mix(in srgb, Canvas 70%, green 30%);
+    background: var(--tone-good);
   }
 
   .tier.heuristic {
-    background: color-mix(in srgb, Canvas 70%, goldenrod 30%);
+    background: var(--tone-warn);
   }
 
   .tier.text-only {
-    background: color-mix(in srgb, Canvas 80%, CanvasText 20%);
+    background: var(--line-edge);
   }
 
   .tier.unreachable {
-    background: color-mix(in srgb, Canvas 72%, crimson 28%);
+    background: var(--tone-bad);
   }
 
   .untested {
-    opacity: 0.45;
+    opacity: var(--muted);
   }
 
   .why td {
     border-top: none;
-    opacity: 0.6;
+    opacity: var(--muted);
     padding-top: 0;
   }
 
@@ -1457,7 +1473,7 @@
 
   .capture.listening {
     border-color: AccentColor;
-    box-shadow: 0 0 0 3px color-mix(in srgb, AccentColor 25%, transparent);
+    box-shadow: 0 0 0 3px var(--focus-ring);
   }
 
   .capture kbd {
@@ -1467,14 +1483,14 @@
   }
 
   .capture .prompt {
-    opacity: 0.7;
+    opacity: var(--muted-strong);
   }
 
   .path {
     display: block;
     font-family: ui-monospace, monospace;
     font-size: 11px;
-    opacity: 0.75;
+    opacity: var(--muted-strong);
     overflow-wrap: anywhere;
   }
 </style>
