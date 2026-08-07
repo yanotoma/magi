@@ -21,6 +21,7 @@ Use the project-local skills in `.claude/skills/`:
 | `svelte-5` | Any Svelte component |
 | `llm-providers` | Any provider, request-mapping, streaming, or pre-flight code |
 | `macos-permissions` | TCC permissions, Info.plist, signing, notarization |
+| `audio-stt` | Any `cpal`, resampling, `whisper-rs`, or model-download code |
 
 They exist because these areas share one failure mode: **the wrong version or the wrong assumption is better represented in training data than the right one.** Tauri v1/v2 and Svelte 4/5 have incompatible APIs; "OpenAI-compatible" reads like a standard but Anthropic is outside it; macOS permissions fail with no error and no log. Do not rely on recalled knowledge in any of these five areas.
 

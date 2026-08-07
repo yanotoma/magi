@@ -272,7 +272,7 @@ Project-local skills exist so future sessions don't re-derive version-specific t
 | `svelte-5` | ✅ | Runes vs Svelte 4, `.svelte.ts`, Tauri IPC import paths |
 | `llm-providers` | ✅ | Provider protocol families, vision/tool/stream formats, pre-flight probes |
 | `macos-permissions` | ✅ | TCC, Info.plist, signing, notarization, sidecar signing |
-| `audio-stt` | M4 | cpal device handling, resampling, whisper-rs build and Metal |
+| `audio-stt` | ✅ | cpal 0.18 behavioural breaks, the 16 kHz contract, the realtime callback, whisper-rs build and Metal, and the model download whose obvious checksum is the wrong value |
 | `screen-capture` | M5 | xcap, multi-display, downscaling for vision cost |
 | `release` | M7 | Tag → universal build → sign → notarize → staple → GitHub release → updater |
 | `wake-word` | M8 | openWakeWord ONNX via `ort`, false-positive tuning |
