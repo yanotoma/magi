@@ -36,7 +36,9 @@ async-trait = "0.1"
 futures-util = { version = "0.3", default-features = false }
 # rustls rather than the system TLS stack: one fewer thing that differs
 # between a developer machine, a CI runner, and a user's Mac.
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+# `blocking` for the model download: it streams straight to disk, so async buys
+# nothing there and would need a runtime to test. Everything else uses the async API.
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "blocking"] }
 tokio = { version = "1", features = ["sync", "macros", "rt"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -67,6 +69,8 @@ cpal = "0.18"
 # `tracing_backend` routes whisper.cpp's own log output into `tracing` rather than
 # stderr, so the C++ layer complains in the same place as everything else.
 whisper-rs = { version = "0.16", features = ["tracing_backend"] }
+# Verifies the downloaded speech model against the checksum from HuggingFace's API.
+sha2 = "0.10"
 thiserror = "2"
 toml = "0.8"
 tracing = "0.1"

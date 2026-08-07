@@ -10,9 +10,11 @@
 //! that conversion can happen and it is `audio::format`.
 
 pub mod fake;
+pub mod model;
 pub mod whisper;
 
 pub use fake::FakeTranscriber;
+pub use model::Model;
 pub use whisper::WhisperTranscriber;
 
 use crate::audio::format::TARGET_RATE;
