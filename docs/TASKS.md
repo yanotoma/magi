@@ -5,7 +5,7 @@ Complete breakdown of what is done and what is pending, across every milestone.
 **Last updated:** 2026-08-07
 **Current phase:** M4 — audio and speech-to-text, targeting `0.3.0-alpha.1`
 **Current version:** `0.2.0-alpha.2` (released — see [VERSIONING.md](VERSIONING.md))
-**Overall:** 94 / 153 tasks done (61%)
+**Overall:** 98 / 157 tasks done (62%)
 
 Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 
@@ -19,11 +19,11 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 | **M1** | Shell — tray, hotkey, windows | `0.1.0-alpha.1` | 15 | 16 | ✅ Shipped |
 | **M2** | Config & providers | `0.2.0-alpha.1` | 28 | 28 | ✅ Shipped |
 | **M3** | Pre-flight & capability tiers | `0.2.0-alpha.2` | 13 | 14 | ✅ Shipped |
-| **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 23 | 23 | 🔨 Next |
+| **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 27 | 27 | 🔨 Code complete |
 | **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 0 | 13 | ⬜ |
 | **M6** | Session machine & panel UX | `0.5.0-beta.1` | 0 | 16 | ⬜ |
 | **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 14 | ⬜ |
-| — | **v1 total** | `1.0.0` | **94** | **139** | |
+| — | **v1 total** | `1.0.0` | **98** | **143** | |
 | **M8** | v2 — wake word & TTS | `1.1.0` | 0 | 9 | 🔮 Post-v1 |
 | **M9** | v3 — computer use | `1.2.0` | 0 | 5 | 🔮 Post-v1 |
 
@@ -189,6 +189,12 @@ Deliberately not the session state machine, which is M6's. This is the smallest 
 - [x] `Transcriber` trait plus a fake. Synchronous on purpose — inference is CPU-bound for seconds, so making it `async` would suggest it yields when it would in fact occupy a runtime thread throughout. Rejects Whisper's known silence artefacts ("Thank you.", "[BLANK_AUDIO]"), matched on the whole string so a real question containing a polite phrase survives
 - [x] Microphone permission request and denial handling. `NSMicrophoneUsageDescription` in a `src-tauri/Info.plist` that Tauri merges — without it the process is **terminated** on first microphone access, with no exception and nothing on screen for a tray app. The state is read without prompting via `AVCaptureDevice.authorizationStatusForMediaType`, so Settings shows what is true rather than finding out when a recording fails
 - [x] Distinguish *not yet asked* from *denied* from *restricted*. The untouched state is the intended path, not a failure, and must not read as one; a Mac managed by a configuration profile cannot be fixed in System Settings, so pointing there would send the user somewhere useless
+
+**Language shortlist**
+- [x] Settings → Voice shows a checkbox list of languages in place of a single dropdown — leave it empty to detect from all ~99, tick one to pin it, or tick several to restrict detection to your shortlist. Unrestricted detection on a short utterance can misidentify two seconds of Spanish as French; constraining the candidates removes the miss
+- [x] English-only models (`.en`) say so in Settings and note the language shortlist is not active — they cannot transcribe anything else, so appearing to honour the setting would be a promise they cannot keep
+- [x] The old `voice.language` key in `config.toml` is read automatically on first launch and converted to the new `voice.languages` list, so configs written before this change need no edits
+- [x] `config.toml` validation catches unrecognised language codes, lists longer than eight entries, and duplicates, reporting each as a distinct error
 
 ---
 

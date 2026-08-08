@@ -75,8 +75,7 @@ pub fn run() {
             let config_voice_model = config.voice.model;
             // `None` means detect. The config stores "auto" as a string because it also
             // has to survive being hand-edited; the transcriber wants the absence.
-            let config_voice_language = (config.voice.language != crate::config::AUTO_LANGUAGE)
-                .then(|| config.voice.language.clone());
+            let config_voice_languages = config.voice.languages.clone();
 
             // Probe results, if any exist. Infallible: a missing or unreadable file
             // means nothing has been probed yet, which is an ordinary first-run
@@ -101,7 +100,7 @@ pub fn run() {
                     crate::stt::WhisperTranscriber::new(
                         config_voice_model,
                         &models_dir,
-                        config_voice_language,
+                        config_voice_languages,
                     ),
                 )),
                 http: reqwest::Client::new(),
@@ -152,7 +151,7 @@ pub fn run() {
             commands::set_hotkey,
             commands::get_voice,
             commands::set_speech_model,
-            commands::set_voice_language,
+            commands::set_voice_languages,
             commands::download_speech_model,
             commands::remove_speech_model,
             commands::open_permission_settings,

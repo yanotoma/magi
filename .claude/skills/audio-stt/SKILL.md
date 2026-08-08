@@ -109,6 +109,22 @@ Magi did exactly that and two seconds of Spanish came back as zero segments: the
 
 Also worth setting: `set_suppress_blank(true)` and `set_suppress_nst(true)`, which stop the blank and non-speech tokens at the source instead of filtering them afterwards.
 
+## Restricting language detection to a shortlist
+
+**`set_language` is binary: one language pinned, or all ~99.** The whisper.cpp API offers `set_language(Some("es"))` to pin a single language and `set_language(None)` for auto-detect across everything it knows. There is no built-in "detect among these three" path.
+
+**`lang_detect` returns the full probability vector**, which is enough to implement a shortlist in application code. Call `state.pcm_to_mel(samples, threads)` first — it is the required prerequisite — then `state.lang_detect(offset_ms, threads)`, which in whisper-rs 0.16 returns `Result<(i32, Vec<f32>), WhisperError>`. Filter the vector to your candidates, take the argmax, and pass the winner to `set_language` before calling `full`.
+
+**The vector is indexed by language id, not by table position.** `whisper_lang_auto_detect_with_state` writes `lang_probs[prob.second] = prob.first` where `prob.second` is the language id, *after* sorting its working list by descending probability — so the vector is in id order and the sort is invisible to the caller. Index it with `whisper_rs::get_lang_id("es")`; never with an enumeration index.
+
+**A shortlist costs one extra encoder pass.** Not free, and the tempting claim that it reuses work whisper does anyway is wrong. `whisper_lang_auto_detect_with_state` runs `whisper_encode` plus one `whisper_decode` to get the language logits. `whisper_full` then recomputes the MEL unconditionally (`if (n_samples > 0)`) and encodes again for the real transcription — and because `params.language` is now set, it skips its own detect. So the unrestricted path pays mel+encode+decode+encode inside `full`, and the shortlist path pays mel+encode+decode outside it and mel+encode inside. On `base` over a few seconds it is not noticeable; on `large-v3-turbo` over two minutes, measure before assuming.
+
+**A missing `pcm_to_mel` fails loudly, not silently.** Worth knowing so nobody hunts for a silent-corruption bug that cannot happen: with no MEL computed, `state->mel.n_len_org` is `0`, the guard `seek >= state->mel.n_len_org` fires, and whisper.cpp logs *"offset 0ms is past the end of the audio (0ms)"* and returns `-2`. whisper-rs turns any negative return into `Err(WhisperError::GenericError(ret))`. Handle that `Err` by falling back to unrestricted detection rather than by failing the transcription — the user would rather be transcribed in the wrong language than not at all.
+
+**Unrestricted detection misreads short utterances.** Measured: two seconds of Spanish detected as French at p=0.18. The probability is low but there is no built-in threshold — whisper returns whichever language has the highest probability over the window, and at two seconds the evidence is thin enough that nearby languages compete. A shortlist of `["es", "en"]` eliminates French as a candidate entirely.
+
+**Do not call `set_detect_language(true)`.** This is a separate mode that identifies the language and then exits, transcribing nothing. The correct flow for a shortlist is: `pcm_to_mel` → `lang_detect` → pick winner → `set_language(Some(winner))` → `full`. See the `.en` models section above for why `set_language(None)` alone is already auto-detect and why `set_detect_language(true)` must never be added to it.
+
 ## Test the pipeline with real speech, not with tones
 
 A synthetic tone proves resampling preserves energy and proves nothing about whether the model produces words. Two separate bugs here — an over-aggressive segment filter, and `detect_language` — passed every unit test and both produced empty transcripts.
@@ -212,3 +228,5 @@ See `.claude/skills/macos-permissions/SKILL.md` — including the point that a r
 - [ ] The download resumes rather than restarting
 - [ ] `AudioSource` and `Transcriber` both have fakes, and the tests use them
 - [ ] No test requires a microphone, a GPU, or the network
+- [ ] If a language shortlist is active: `pcm_to_mel` is called before `lang_detect`, and the winner is passed to `set_language` before `full`
+- [ ] If the model is an `.en` variant: `set_language("en")` is forced and the shortlist is reported as inactive in the UI

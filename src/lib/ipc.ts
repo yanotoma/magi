@@ -203,8 +203,14 @@ export type SpeechModelView = {
 
 export type VoiceView = {
   models: SpeechModelView[];
-  /** The configured language, or `"auto"` to detect it. */
-  language: string;
+  /**
+   * The languages Magi expects, in no particular order.
+   *
+   * Its length is the setting: empty detects from all ninety-nine, one pins it, several
+   * restrict detection to those. The third is the useful case — unrestricted detection on
+   * a short utterance misreads it in ways a person would not.
+   */
+  languages: string[];
   /**
    * Set when the chosen model cannot honour the chosen language.
    *
@@ -246,13 +252,12 @@ export const downloadSpeechModel = async (model: SpeechModel): Promise<VoiceView
   invoke<VoiceView>("download_speech_model", { model });
 
 /**
- * Sets the spoken language, or `"auto"` to detect it.
+ * Sets which languages Magi should expect.
  *
- * Detection is the default and usually right. Choosing explicitly skips the detection
- * pass and removes the chance of a short utterance being detected as the wrong language.
+ * Empty detects from all of them, one pins it, several restrict detection to those.
  */
-export const setVoiceLanguage = async (language: string): Promise<VoiceView> =>
-  invoke<VoiceView>("set_voice_language", { language });
+export const setVoiceLanguages = async (languages: string[]): Promise<VoiceView> =>
+  invoke<VoiceView>("set_voice_languages", { languages });
 
 /**
  * The languages offered in Settings.
@@ -262,7 +267,6 @@ export const setVoiceLanguage = async (language: string): Promise<VoiceView> =>
  * accepts any code.
  */
 export const LANGUAGES: ReadonlyArray<{ code: string; label: string }> = [
-  { code: "auto", label: "Detect automatically" },
   { code: "en", label: "English" },
   { code: "es", label: "Español" },
   { code: "pt", label: "Português" },

@@ -12,7 +12,7 @@
     runPreflight,
     getVoice,
     setSpeechModel,
-    setVoiceLanguage,
+    setVoiceLanguages,
     LANGUAGES,
     downloadSpeechModel,
     removeSpeechModel,
@@ -262,6 +262,27 @@
       downloadingHere = null;
       progress = null;
     }
+  };
+
+  /** The display name for a language code, falling back to the code itself.
+   *
+   *  A config written by hand can name a language whose code Magi has no entry for.
+   *  Whisper still understands it, so showing the raw code is more honest than pretending
+   *  the setting is empty. */
+  const labelFor = (code: string): string =>
+    LANGUAGES.find((language) => language.code === code)?.label ?? code;
+
+  /** Adds or removes a language from the shortlist.
+   *
+   *  Sent as a whole list rather than as a delta, so the backend never has to reconcile
+   *  two views of the same setting — and a click that fails leaves the config exactly as
+   *  it was rather than half-applied. */
+  const toggleLanguage = (code: string) => {
+    const current = voice?.languages ?? [];
+    const next = current.includes(code)
+      ? current.filter((c) => c !== code)
+      : [...current, code];
+    runVoice(() => setVoiceLanguages(next));
   };
 
   const percent = (p: DownloadProgress): number =>
@@ -645,23 +666,45 @@
           </button>
         {/if}
 
-        <h2 class="spaced">Language</h2>
-        <label>
-          Spoken language
-          <select
-            value={voice.language}
-            onchange={(e) => runVoice(() => setVoiceLanguage(e.currentTarget.value))}
-          >
-            {#each LANGUAGES as language (language.code)}
-              <option value={language.code}>{language.label}</option>
-            {/each}
-          </select>
-        </label>
+        <h2 class="spaced">Languages</h2>
         <p class="hint">
-          Detection is usually right, and handles switching languages between questions.
-          Choosing one is slightly faster and removes the chance of a short phrase being
-          detected wrongly.
+          {#if voice.languages.length === 0}
+            Detecting from all languages Magi knows. Ticking the ones you actually speak
+            makes it harder to mishear you — a short phrase is sometimes read as a
+            language nobody in the room speaks.
+          {:else if voice.languages.length === 1}
+            Always transcribing as {labelFor(voice.languages[0])}. No detection, so nothing
+            to get wrong.
+          {:else}
+            Detecting between these {voice.languages.length}, and nothing else.
+          {/if}
         </p>
+
+        <!--
+          Checkboxes rather than a dropdown, because the length of the selection is the
+          setting: none, one, or a few behave differently and a single-select cannot say
+          "either of these two".
+        -->
+        <ul class="languages">
+          {#each LANGUAGES as language (language.code)}
+            <li>
+              <label class="checkbox">
+                <input
+                  type="checkbox"
+                  checked={voice.languages.includes(language.code)}
+                  onchange={() => toggleLanguage(language.code)}
+                />
+                {language.label}
+              </label>
+            </li>
+          {/each}
+        </ul>
+
+        {#if voice.languages.length > 0}
+          <button type="button" class="link" onclick={() => runVoice(() => setVoiceLanguages([]))}>
+            Detect from all languages instead
+          </button>
+        {/if}
 
         <!--
           The trap this exists to close. An English-only model given Spanish does not
@@ -670,7 +713,7 @@
         -->
         {#if voice.language_ignored}
           <p class="error" role="alert">
-            The selected model understands English only, so this language is ignored.
+            The selected model understands English only, so these languages are ignored.
             Pick a multilingual model below.
           </p>
         {/if}
@@ -1469,7 +1512,13 @@
     gap: 7px;
   }
 
-  input,
+  /* `:not([type="checkbox"])`, because everything below is written for a field you type
+     into. A checkbox given a background, a border and 5px of padding stops being the
+     platform's control: the box inflates, a second rectangle draws around the tick, and
+     the accent colour and dark-mode treatment macOS would have supplied are lost.
+     Excluding it is better than undoing it afterwards — the native control is never
+     touched, so there is nothing to keep in sync. */
+  input:not([type="checkbox"]),
   select,
   textarea {
     background: Field;
@@ -1712,6 +1761,19 @@
 
   .badge.not-asked {
     background: var(--tone-neutral);
+  }
+
+  /* Two columns: twelve languages down one column pushes the model list off screen, and
+     the list is scanned rather than read in order. */
+  .languages {
+    columns: 2;
+    list-style: none;
+    margin: var(--gap-sm) 0;
+    padding: 0;
+  }
+
+  .languages li {
+    padding: 1px 0;
   }
 
   .speech-models {

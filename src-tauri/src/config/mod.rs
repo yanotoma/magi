@@ -58,10 +58,20 @@ pub enum ConfigError {
     InvalidHotkey { reason: String },
 
     #[error(
-        "[voice] language is '{found}', which is neither 'auto' nor a language code. \
-         Use 'auto' to detect it, or a code such as 'en', 'es' or 'pt'."
+        "[voice] languages contains '{found}', which is not a language code. Use codes \
+         such as 'en', 'es' or 'pt', or leave the list empty to detect automatically."
     )]
     InvalidLanguage { found: String },
+
+    #[error(
+        "[voice] languages lists {found} entries, over the limit of {limit}. Restricting \
+         detection helps because it removes candidates; a list this long is not a \
+         shortlist, and an empty list detects from all of them."
+    )]
+    TooManyLanguages { found: usize, limit: usize },
+
+    #[error("[voice] languages lists '{found}' twice")]
+    DuplicateLanguage { found: String },
 }
 
 /// How a provider speaks, which decides which implementation handles it.
@@ -210,8 +220,15 @@ const MAX_LANGUAGE_CODE: usize = 8;
 /// Which language to transcribe, or detect.
 pub const AUTO_LANGUAGE: &str = "auto";
 
+/// How many languages may be listed before the list stops being a shortlist.
+///
+/// Restricting detection is only useful because it removes candidates. A list of thirty is
+/// not a shortlist, and at that point whisper's own detection over all of them is both
+/// simpler and better tuned.
+const MAX_LANGUAGES: usize = 8;
+
 /// Voice input settings.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct VoiceConfig {
     /// Which speech model transcribes.
@@ -222,29 +239,69 @@ pub struct VoiceConfig {
     /// be present.
     pub model: crate::stt::Model,
 
-    /// The spoken language, or `"auto"` to let the model decide.
+    /// The languages Magi should expect, in no particular order.
     ///
-    /// `"auto"` by default. Detection costs a pass over the audio and is worth it: the
-    /// alternative is a setting most people never find, and the failure when it is wrong
-    /// is not an error but a fluent wrong transcript.
+    /// Its **length** is the setting, and each case behaves differently:
     ///
-    /// An ISO 639-1 code otherwise — `es`, `en`, `pt`, `fr`. Stored as a string rather
-    /// than an enum so a language Magi has no dropdown entry for still works when
-    /// written by hand; whisper.cpp accepts about ninety-nine of them and enumerating
-    /// them here would be a list to maintain for no gain.
+    /// - **empty** — detect from all ninety-nine whisper.cpp knows. The default, because a
+    ///   setting most people never open should not be the difference between being
+    ///   understood and not.
+    /// - **one** — that language, pinned. Skips the detection pass, so there is no
+    ///   detection left to get wrong. Not a hard constraint on the model, though: a
+    ///   multilingual model pinned to `en` and handed clear Spanish transcribed it as
+    ///   Spanish anyway when this was tested. The language token conditions the decoder
+    ///   rather than binding it.
+    /// - **several** — detect, but only among these. Whisper reports a probability for
+    ///   every language it knows and the highest of *these* wins.
+    ///
+    /// The third case is the one worth having. Unrestricted detection on a short utterance
+    /// gets it wrong in ways a person would not: two seconds of Spanish here came back as
+    /// French at 0.18 confidence. Someone who speaks Spanish and English can say so, and
+    /// remove ninety-seven ways to be misheard without pinning either one.
+    ///
+    /// ISO 639-1 codes, stored as strings rather than an enum so a language Magi has no
+    /// dropdown entry for still works when written by hand.
     ///
     /// **Ignored entirely by an English-only model.** Those cannot transcribe anything
     /// else, so honouring the setting would be a promise the model cannot keep — the UI
     /// says so rather than letting it look effective.
-    pub language: String,
+    pub languages: Vec<String>,
+
+    /// The single-language key this replaced.
+    ///
+    /// Read and migrated, never written back. `"auto"` becomes an empty list, a code
+    /// becomes a list of one. Kept because `deny_unknown_fields` would otherwise reject
+    /// every config written before this change — and refusing to start over a renamed
+    /// field is the definition of a change that requires the user to act.
+    #[serde(default, skip_serializing)]
+    language: Option<String>,
 }
 
-impl Default for VoiceConfig {
-    fn default() -> Self {
-        Self {
-            model: crate::stt::Model::default(),
-            language: AUTO_LANGUAGE.to_string(),
+impl VoiceConfig {
+    /// Folds the old single-language key into the list.
+    ///
+    /// Called once after parsing. Idempotent, because a config that has already been
+    /// migrated has no `language` key left to read.
+    fn migrate(&mut self) {
+        let Some(old) = self.language.take() else {
+            return;
+        };
+
+        if !self.languages.is_empty() {
+            // Both keys present. The list wins, because it is the one this version writes
+            // and the one the UI edits.
+            tracing::info!("[voice] language and languages were both set; using languages");
+            return;
         }
+
+        let old = old.trim();
+        if !old.is_empty() && old != AUTO_LANGUAGE {
+            self.languages.push(old.to_string());
+        }
+        tracing::info!(
+            languages = ?self.languages,
+            "migrated [voice] language to [voice] languages"
+        );
     }
 }
 
@@ -315,7 +372,9 @@ impl Config {
             return Err(ConfigError::UnsupportedSchema(probe.schema_version));
         }
 
-        let config: Config = toml::from_str(source)?;
+        let mut config: Config = toml::from_str(source)?;
+        // Before validating, so a migrated value is checked like any other.
+        config.voice.migrate();
         config.validate()?;
         Ok(config)
     }
@@ -332,17 +391,37 @@ impl Config {
             });
         }
 
-        // A language code, or "auto". Checked so a typo is a reported mistake rather than
-        // a setting that silently does nothing.
-        let language = self.voice.language.trim();
-        let plausible = language == AUTO_LANGUAGE
-            || (!language.is_empty()
+        // Every entry a plausible code, so a typo is a reported mistake rather than a
+        // language that silently never wins the comparison.
+        for language in &self.voice.languages {
+            let language = language.trim();
+            let plausible = !language.is_empty()
                 && language.len() <= MAX_LANGUAGE_CODE
-                && language.chars().all(|c| c.is_ascii_lowercase() || c == '-'));
-        if !plausible {
-            return Err(ConfigError::InvalidLanguage {
-                found: language.chars().take(32).collect(),
+                && language.chars().all(|c| c.is_ascii_lowercase() || c == '-');
+            if !plausible {
+                return Err(ConfigError::InvalidLanguage {
+                    found: language.chars().take(32).collect(),
+                });
+            }
+        }
+
+        if self.voice.languages.len() > MAX_LANGUAGES {
+            return Err(ConfigError::TooManyLanguages {
+                found: self.voice.languages.len(),
+                limit: MAX_LANGUAGES,
             });
+        }
+
+        // Duplicates are harmless to the comparison and a sign the list was edited by
+        // hand and not read back. Reported rather than silently deduplicated, so the file
+        // and the behaviour agree.
+        let mut seen = HashSet::new();
+        for language in &self.voice.languages {
+            if !seen.insert(language.trim()) {
+                return Err(ConfigError::DuplicateLanguage {
+                    found: language.trim().to_string(),
+                });
+            }
         }
 
         // Checked on load, not only when Settings writes it. This file is meant to
@@ -450,32 +529,138 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_language_defaults_to_automatic_detection() {
-        // The alternative is a setting most people never find, and the failure when it is
-        // wrong is not an error but a fluent wrong transcript.
+    fn languages_defaults_to_detecting_everything() {
+        // A setting most people never find should not be the difference between being
+        // understood and not.
         let config = Config::from_toml("").expect("an empty file is valid");
-        assert_eq!(config.voice.language, AUTO_LANGUAGE);
+        assert!(config.voice.languages.is_empty());
+    }
+
+    #[test]
+    fn a_shortlist_of_languages_round_trips() {
+        let config = Config::from_toml(
+            r#"
+            [voice]
+            languages = ["es", "en"]
+            "#,
+        )
+        .expect("valid");
+        assert_eq!(config.voice.languages, vec!["es", "en"]);
+
+        let written = toml::to_string_pretty(&config).expect("serialisable");
+        assert!(written.contains("\"es\""), "got:\n{written}");
+        assert!(written.contains("\"en\""), "got:\n{written}");
+    }
+
+    #[test]
+    fn the_old_single_language_key_is_migrated_rather_than_rejected() {
+        // Every config written before this change has `language`. Refusing to start over a
+        // renamed field is the definition of a change that requires the user to act.
+        let auto = Config::from_toml(
+            r#"
+            [voice]
+            language = "auto"
+            "#,
+        )
+        .expect("an older config must load");
+        assert!(
+            auto.voice.languages.is_empty(),
+            "auto becomes an empty list"
+        );
+
+        let pinned = Config::from_toml(
+            r#"
+            [voice]
+            language = "es"
+            "#,
+        )
+        .expect("an older config must load");
+        assert_eq!(
+            pinned.voice.languages,
+            vec!["es"],
+            "a code becomes a list of one"
+        );
+    }
+
+    #[test]
+    fn the_migrated_key_is_never_written_back() {
+        // Otherwise the file would carry both forever, and the next reader would have to
+        // decide which one meant it.
+        let config = Config::from_toml(
+            r#"
+            [voice]
+            language = "pt"
+            "#,
+        )
+        .expect("valid");
+        let written = toml::to_string_pretty(&config).expect("serialisable");
+        assert!(
+            !written.contains("language ="),
+            "the old key survived a write:\n{written}"
+        );
+        assert!(written.contains("languages"), "got:\n{written}");
+    }
+
+    #[test]
+    fn the_list_wins_when_both_keys_are_present() {
+        let config = Config::from_toml(
+            r#"
+            [voice]
+            language = "fr"
+            languages = ["es", "en"]
+            "#,
+        )
+        .expect("valid");
+        assert_eq!(config.voice.languages, vec!["es", "en"]);
     }
 
     #[test]
     fn a_language_code_is_accepted() {
         for code in ["es", "en", "pt", "fr", "zh", "pt-br"] {
-            let source = format!("[voice]\nlanguage = \"{code}\"");
+            let source = format!("[voice]\nlanguages = [\"{code}\"]");
             let config = Config::from_toml(&source).unwrap_or_else(|e| panic!("{code}: {e}"));
-            assert_eq!(config.voice.language, code);
+            assert_eq!(config.voice.languages, vec![code]);
         }
     }
 
     #[test]
-    fn prose_in_the_language_field_is_refused() {
-        // A typo here would otherwise be a setting that silently does nothing.
+    fn prose_in_the_language_list_is_refused() {
+        // A typo would otherwise be a language that silently never wins the comparison.
         for bad in ["Spanish", "ES", "es_MX", "the language I speak", ""] {
-            let source = format!("[voice]\nlanguage = \"{bad}\"");
+            let source = format!("[voice]\nlanguages = [\"{bad}\"]");
             assert!(
                 Config::from_toml(&source).is_err(),
                 "{bad:?} should have been refused"
             );
         }
+    }
+
+    #[test]
+    fn a_list_long_enough_to_stop_being_a_shortlist_is_refused() {
+        // Restricting detection helps because it removes candidates. Past a point the
+        // restriction is doing nothing, and whisper's own detection over all of them is
+        // both simpler and better tuned.
+        let many: Vec<String> = ["es", "en", "pt", "fr", "de", "it", "nl", "ja", "zh"]
+            .iter()
+            .map(|c| format!("\"{c}\""))
+            .collect();
+        let source = format!("[voice]\nlanguages = [{}]", many.join(", "));
+        let error = Config::from_toml(&source).expect_err("nine is over the limit");
+        assert!(matches!(error, ConfigError::TooManyLanguages { .. }));
+    }
+
+    #[test]
+    fn a_duplicate_language_is_reported_rather_than_deduplicated() {
+        // Harmless to the comparison, and a sign the list was edited by hand and not read
+        // back. Reported so the file and the behaviour agree.
+        let error = Config::from_toml(
+            r#"
+            [voice]
+            languages = ["es", "en", "es"]
+            "#,
+        )
+        .expect_err("a duplicate must be reported");
+        assert!(matches!(error, ConfigError::DuplicateLanguage { .. }));
     }
 
     #[test]

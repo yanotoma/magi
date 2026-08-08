@@ -197,8 +197,8 @@ pub struct SpeechModelView {
 pub struct VoiceView {
     pub models: Vec<SpeechModelView>,
 
-    /// The configured language, or `"auto"`.
-    pub language: String,
+    /// The languages Magi expects. Empty means detect from all of them.
+    pub languages: Vec<String>,
 
     /// Set when the chosen model cannot honour the chosen language.
     ///
@@ -928,15 +928,13 @@ fn describe(reason: &StopReason) -> Option<String> {
 /// the two setters cannot drift, and so the reason lives once: the old transcriber holds a
 /// loaded model, and dropping it is what frees those hundreds of megabytes.
 fn rebuild_transcriber(state: &State<'_, AppState>) -> CommandResult<()> {
-    let (model, language) = {
+    let (model, languages) = {
         let config = state.config.lock().map_err(to_message)?;
-        let language = (config.voice.language != crate::config::AUTO_LANGUAGE)
-            .then(|| config.voice.language.clone());
-        (config.voice.model, language)
+        (config.voice.model, config.voice.languages.clone())
     };
 
     let replacement: Arc<dyn crate::stt::Transcriber> = Arc::new(
-        crate::stt::WhisperTranscriber::new(model, &state.models_dir, language),
+        crate::stt::WhisperTranscriber::new(model, &state.models_dir, languages),
     );
 
     *state.transcriber.lock().map_err(to_message)? = replacement;
@@ -973,18 +971,17 @@ pub fn get_voice(state: State<'_, AppState>) -> CommandResult<VoiceView> {
 
     let microphone = permissions::microphone();
 
-    let language = {
+    let languages = {
         let config = state.config.lock().map_err(to_message)?;
-        config.voice.language.clone()
+        config.voice.languages.clone()
     };
 
-    // An explicit non-English language on an English-only model. Not an error to refuse,
-    // because the user may be mid-way through changing both — but it must be visible.
-    let language_ignored =
-        !selected.is_multilingual() && language != crate::config::AUTO_LANGUAGE && language != "en";
+    // A non-English selection on an English-only model. Not an error to refuse, because the
+    // user may be mid-way through changing both — but it must be visible.
+    let language_ignored = !selected.is_multilingual() && languages.iter().any(|code| code != "en");
 
     Ok(VoiceView {
-        language,
+        languages,
         language_ignored,
         ready: selected.path_in(&state.models_dir).exists(),
         microphone,
@@ -1015,21 +1012,22 @@ pub fn set_speech_model(state: State<'_, AppState>, model: Model) -> CommandResu
     get_voice(state)
 }
 
-/// Sets the spoken language, or `"auto"` to detect it.
+/// Sets which languages Magi should expect.
 ///
-/// Detection is the default and is usually right. Choosing explicitly is an optimisation:
-/// it skips the detection pass, and removes the chance of a short utterance being
-/// detected as the wrong language.
+/// Empty detects from all ninety-nine, one pins it, several restrict detection to those.
+/// The third is the useful case: unrestricted detection on a short utterance misreads it in
+/// ways a person would not, and naming the two or three you actually speak removes the rest
+/// without committing to either.
 #[tauri::command]
-pub fn set_voice_language(
+pub fn set_voice_languages(
     state: State<'_, AppState>,
-    language: String,
+    languages: Vec<String>,
 ) -> CommandResult<VoiceView> {
     {
         let mut config = state.config.lock().map_err(to_message)?;
-        let previous = std::mem::replace(&mut config.voice.language, language);
+        let previous = std::mem::replace(&mut config.voice.languages, languages);
         if let Err(error) = config.save(&state.config_dir) {
-            config.voice.language = previous;
+            config.voice.languages = previous;
             return Err(to_message(error));
         }
     }

@@ -50,12 +50,12 @@ fn thread_count() -> i32 {
 }
 
 pub struct WhisperTranscriber {
-    /// The language to transcribe, or `None` to detect it.
+    /// The languages to expect. Empty means detect from all of them.
     ///
     /// Held rather than passed per call because it is a setting, and threading it through
     /// `Transcriber::transcribe` would put a whisper-specific concept in a trait that has
     /// no other opinion about languages.
-    language: Option<String>,
+    languages: Vec<String>,
 
     /// Whether the model can transcribe anything other than English.
     ///
@@ -76,13 +76,13 @@ pub struct WhisperTranscriber {
 impl WhisperTranscriber {
     /// Creates a transcriber for a model that may or may not exist yet.
     ///
-    /// `language` is `None` to detect, or an ISO 639-1 code. It is ignored when the model
-    /// is English-only.
-    pub fn new(model: crate::stt::Model, dir: &Path, language: Option<String>) -> Self {
+    /// `languages` is empty to detect from all, one code to pin, or several to detect
+    /// among just those. Ignored when the model is English-only.
+    pub fn new(model: crate::stt::Model, dir: &Path, languages: Vec<String>) -> Self {
         Self {
             context: Mutex::new(None),
             model_path: model.path_in(dir),
-            language,
+            languages,
             multilingual: model.is_multilingual(),
         }
     }
@@ -135,6 +135,67 @@ impl WhisperTranscriber {
             }
         }
     }
+}
+
+/// Picks the most likely of `allowed`, ignoring every other language.
+///
+/// Whisper's own detection considers all ninety-nine it knows, and on a short utterance it
+/// gets that wrong in ways a person would not — two seconds of Spanish scored as French at
+/// 0.18 confidence here. Restricting the comparison to the languages someone actually
+/// speaks removes ninety-seven ways to be misheard without pinning either of them.
+///
+/// Implemented rather than configured because whisper.cpp has no such option: it takes one
+/// language or all of them. What makes it possible anyway is that `lang_detect` fills in a
+/// probability for *every* language, indexed by language id — so choosing among a subset is
+/// an argmax over entries whisper hands us regardless.
+///
+/// Not free, though, and the tidier claim that it reuses work `full` would do anyway is
+/// wrong: `lang_detect` runs its own encode and decode, and `full` then recomputes the mel
+/// and encodes again for the real transcription. So a shortlist costs one extra encode pass
+/// over the first window — paid only when more than one language is listed, and unmeasured
+/// on the larger models.
+///
+/// Returns `None` if detection fails, which falls back to whisper's own unrestricted
+/// detection — a worse answer beats no answer.
+fn detect_among(
+    state: &mut whisper_rs::WhisperState,
+    samples: &[f32],
+    allowed: &[String],
+    threads: i32,
+) -> Option<String> {
+    let threads = threads.max(1) as usize;
+
+    // `lang_detect` reads the mel spectrogram, so it has to exist first.
+    if let Err(error) = state.pcm_to_mel(samples, threads) {
+        tracing::warn!(%error, "could not compute the spectrogram for language detection");
+        return None;
+    }
+
+    let (_best_of_all, probabilities) = match state.lang_detect(0, threads) {
+        Ok(result) => result,
+        Err(error) => {
+            tracing::warn!(%error, "language detection failed; falling back to whisper's own");
+            return None;
+        }
+    };
+
+    let mut scored: Vec<(&str, f32)> = allowed
+        .iter()
+        .filter_map(|code| {
+            // An unknown code scores nothing rather than crashing: the config accepts any
+            // plausible-looking string, and whisper knows a specific ninety-nine.
+            let id = whisper_rs::get_lang_id(code)?;
+            let probability = probabilities.get(id as usize).copied().unwrap_or(0.0);
+            Some((code.as_str(), probability))
+        })
+        .collect();
+
+    scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+
+    // Logged in full, because "why did it pick Portuguese" is otherwise unanswerable.
+    tracing::info!(candidates = ?scored, "restricted language detection");
+
+    scored.first().map(|(code, _)| code.to_string())
 }
 
 /// The parameters every transcription uses.
@@ -206,11 +267,20 @@ impl Transcriber for WhisperTranscriber {
         // An English-only model is forced to English whatever the setting says. Asking one
         // for Spanish does not fail — it writes English words that sound similar, which is
         // worse than failing, so the setting is overridden rather than honoured.
-        let language: Option<&str> = if self.multilingual {
-            self.language.as_deref()
+        let chosen: Option<String> = if !self.multilingual {
+            Some("en".to_string())
         } else {
-            Some("en")
+            match self.languages.len() {
+                // Detect from everything: whisper's own behaviour for a null language.
+                0 => None,
+                // Pinned. No detection pass at all.
+                1 => Some(self.languages[0].clone()),
+                // The case this exists for: let whisper score every language it knows, and
+                // take the best of the ones the user actually speaks.
+                _ => detect_among(&mut state, samples, &self.languages, thread_count()),
+            }
         };
+        let language: Option<&str> = chosen.as_deref();
 
         state
             .full(params(language), samples)
@@ -278,8 +348,11 @@ mod tests {
     fn a_missing_model_reports_itself_rather_than_failing_to_construct() {
         // The first-run state. If `new` failed, the app could not start to offer the
         // download.
-        let transcriber =
-            WhisperTranscriber::new(crate::stt::Model::Base, Path::new("/nonexistent"), None);
+        let transcriber = WhisperTranscriber::new(
+            crate::stt::Model::Base,
+            Path::new("/nonexistent"),
+            Vec::new(),
+        );
         assert!(!transcriber.is_ready());
         assert!(matches!(transcriber.load(), Err(SttError::ModelMissing)));
     }
@@ -288,8 +361,11 @@ mod tests {
     fn audio_too_short_is_rejected_before_the_model_is_touched() {
         // The order matters: a tapped hotkey must not cost a model load. This passes
         // with no model on disk precisely because the length check comes first.
-        let transcriber =
-            WhisperTranscriber::new(crate::stt::Model::Base, Path::new("/nonexistent"), None);
+        let transcriber = WhisperTranscriber::new(
+            crate::stt::Model::Base,
+            Path::new("/nonexistent"),
+            Vec::new(),
+        );
         let tap = vec![0.0; 100];
         assert!(matches!(
             transcriber.transcribe(&tap),
@@ -299,8 +375,11 @@ mod tests {
 
     #[test]
     fn unloading_a_transcriber_that_never_loaded_is_harmless() {
-        let transcriber =
-            WhisperTranscriber::new(crate::stt::Model::Base, Path::new("/nonexistent"), None);
+        let transcriber = WhisperTranscriber::new(
+            crate::stt::Model::Base,
+            Path::new("/nonexistent"),
+            Vec::new(),
+        );
         transcriber.unload();
         transcriber.unload();
         assert!(!transcriber.is_ready());
@@ -334,7 +413,7 @@ mod tests {
         let transcriber: Box<dyn Transcriber> = Box::new(WhisperTranscriber::new(
             crate::stt::Model::Base,
             Path::new("/nonexistent"),
-            None,
+            Vec::new(),
         ));
         assert!(!transcriber.is_ready());
     }
@@ -343,7 +422,7 @@ mod tests {
     fn the_model_path_is_readable_back() {
         // Settings shows it, and the downloader writes to it.
         let transcriber =
-            WhisperTranscriber::new(crate::stt::Model::BaseEn, Path::new("/tmp"), None);
+            WhisperTranscriber::new(crate::stt::Model::BaseEn, Path::new("/tmp"), Vec::new());
         assert_eq!(
             transcriber.model_path().to_string_lossy(),
             "/tmp/ggml-base.en.bin"
