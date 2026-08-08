@@ -4,12 +4,16 @@
 //! together here, so there is one place to read to understand what happens at
 //! startup.
 
+pub mod audio;
 pub mod commands;
 pub mod config;
 pub mod error;
 pub mod hotkey;
 pub mod llm;
+pub mod permissions;
+pub mod stt;
 pub mod tray;
+pub mod voice;
 pub mod windows;
 
 use std::sync::Mutex;
@@ -67,6 +71,11 @@ pub fn run() {
             let theme = config.appearance.theme;
             let shortcut = config.hotkey.toggle.clone();
             let active = config.active.clone();
+            let push_to_talk = config.hotkey.push_to_talk.clone();
+            let config_voice_model = config.voice.model;
+            // `None` means detect. The config stores "auto" as a string because it also
+            // has to survive being hand-edited; the transcriber wants the absence.
+            let config_voice_languages = config.voice.languages.clone();
 
             // Probe results, if any exist. Infallible: a missing or unreadable file
             // means nothing has been probed yet, which is an ordinary first-run
@@ -80,8 +89,24 @@ pub fn run() {
                 .as_ref()
                 .and_then(|a| capabilities.tier(&a.provider, &a.model));
 
+            // Speech models live beside the config but not in it: a 141 MB binary blob
+            // has no business next to a file the user is encouraged to open in an
+            // editor and paste into bug reports.
+            let models_dir = app.path().app_data_dir()?.join("models");
+
             app.manage(AppState {
+                microphone: Box::new(crate::audio::Microphone::new()),
+                transcriber: Mutex::new(std::sync::Arc::new(
+                    crate::stt::WhisperTranscriber::new(
+                        config_voice_model,
+                        &models_dir,
+                        config_voice_languages,
+                    ),
+                )),
                 http: reqwest::Client::new(),
+                http_blocking: reqwest::blocking::Client::new(),
+                models_dir,
+                downloading: Mutex::new(None),
                 config: Mutex::new(config),
                 config_dir,
                 secrets: std::sync::Arc::new(KeyringStore),
@@ -108,9 +133,7 @@ pub fn run() {
             // A shortcut conflict must not prevent startup. The tray icon is
             // still a working way in, and killing launch over a hotkey clash
             // would leave the user with no entry point at all.
-            if let Err(error) = hotkey::register(app.handle(), &shortcut) {
-                tracing::warn!(%error, shortcut, "continuing without a global shortcut");
-            }
+            hotkey::register_all(app.handle(), &shortcut, &push_to_talk);
 
             Ok(())
         })
@@ -126,6 +149,12 @@ pub fn run() {
             commands::set_show_thinking,
             commands::set_prompt_context,
             commands::set_hotkey,
+            commands::get_voice,
+            commands::set_speech_model,
+            commands::set_voice_languages,
+            commands::download_speech_model,
+            commands::remove_speech_model,
+            commands::open_permission_settings,
             commands::send_text_turn,
             commands::cancel_turn,
         ])

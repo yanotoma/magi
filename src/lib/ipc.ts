@@ -177,6 +177,133 @@ export const setPromptContext = async (context: string): Promise<ConfigView> =>
 export const setHotkey = async (shortcut: string): Promise<ConfigView> =>
   invoke<ConfigView>("set_hotkey", { shortcut });
 
+/** Which speech model transcribes. Mirrors `stt::Model`. */
+export type SpeechModel = "base-en" | "small-en" | "medium-en";
+
+/**
+ * Whether macOS has granted a permission.
+ *
+ * Four states, not two. `not-asked` is the intended first-run path rather than a
+ * failure, and `restricted` cannot be fixed in System Settings at all — so the UI
+ * must not offer the same advice for both.
+ */
+export type Permission = "not-asked" | "granted" | "denied" | "restricted" | "not-applicable";
+
+export type SpeechModelView = {
+  id: SpeechModel;
+  label: string;
+  description: string;
+  /** Rounded for display; the real length comes from the server at download time. */
+  approximate_mb: number;
+  downloaded: boolean;
+  selected: boolean;
+  /** Whether it understands languages other than English. */
+  multilingual: boolean;
+};
+
+export type VoiceView = {
+  models: SpeechModelView[];
+  /**
+   * The languages Magi expects, in no particular order.
+   *
+   * Its length is the setting: empty detects from all ninety-nine, one pins it, several
+   * restrict detection to those. The third is the useful case — unrestricted detection on
+   * a short utterance misreads it in ways a person would not.
+   */
+  languages: string[];
+  /**
+   * Set when the chosen model cannot honour the chosen language.
+   *
+   * An English-only model given anything else does not fail — it writes English words
+   * that sound similar — so the combination has to be visible rather than left to
+   * produce a confident wrong transcript.
+   */
+  language_ignored: boolean;
+  /** Whether the selected model is on disk and usable. */
+  ready: boolean;
+  microphone: Permission;
+  microphone_explanation: string;
+  microphone_settings_url: string;
+  /** The model currently downloading, if any. */
+  downloading: SpeechModel | null;
+};
+
+/** How far along a model download is. */
+export type DownloadProgress = { downloaded: number; total: number };
+
+export const getVoice = async (): Promise<VoiceView> => invoke<VoiceView>("get_voice");
+
+/**
+ * Chooses which model transcribes.
+ *
+ * Allowed for a model that has not been downloaded. Refusing until the file exists
+ * would mean picking Small and then separately asking for it, when picking it *is* the
+ * request.
+ */
+export const setSpeechModel = async (model: SpeechModel): Promise<VoiceView> =>
+  invoke<VoiceView>("set_speech_model", { model });
+
+/**
+ * Downloads a model. Resolves when it is on disk and verified.
+ *
+ * Progress arrives on `magi://model-download` meanwhile — see `onDownloadProgress`.
+ */
+export const downloadSpeechModel = async (model: SpeechModel): Promise<VoiceView> =>
+  invoke<VoiceView>("download_speech_model", { model });
+
+/**
+ * Sets which languages Magi should expect.
+ *
+ * Empty detects from all of them, one pins it, several restrict detection to those.
+ */
+export const setVoiceLanguages = async (languages: string[]): Promise<VoiceView> =>
+  invoke<VoiceView>("set_voice_languages", { languages });
+
+/**
+ * The languages offered in Settings.
+ *
+ * A shortlist, not all ninety-nine whisper.cpp supports: a dropdown of ninety-nine is
+ * worse than one of twelve plus a config file for the rest. Hand-editing `[voice] language`
+ * accepts any code.
+ */
+export const LANGUAGES: ReadonlyArray<{ code: string; label: string }> = [
+  { code: "en", label: "English" },
+  { code: "es", label: "Español" },
+  { code: "pt", label: "Português" },
+  { code: "fr", label: "Français" },
+  { code: "de", label: "Deutsch" },
+  { code: "it", label: "Italiano" },
+  { code: "nl", label: "Nederlands" },
+  { code: "ja", label: "日本語" },
+  { code: "zh", label: "中文" },
+  { code: "ko", label: "한국어" },
+  { code: "ru", label: "Русский" },
+];
+
+export const removeSpeechModel = async (model: SpeechModel): Promise<VoiceView> =>
+  invoke<VoiceView>("remove_speech_model", { model });
+
+/** Opens the System Settings pane for a permission, rather than describing where it is. */
+export const openPermissionSettings = async (kind: "microphone" | "accessibility" | "screen-recording"): Promise<void> =>
+  invoke("open_permission_settings", { kind });
+
+/**
+ * Subscribes to model-download progress.
+ *
+ * Bundled with the completion event so a caller cannot unsubscribe from one and leak
+ * the other.
+ */
+export const onDownloadProgress = async (handlers: {
+  progress: (progress: DownloadProgress) => void;
+  done: () => void;
+}): Promise<UnlistenFn> => {
+  const unlisten = await Promise.all([
+    listen<DownloadProgress>("magi://model-download", (e) => handlers.progress(e.payload)),
+    listen("magi://model-download-done", () => handlers.done()),
+  ]);
+  return () => unlisten.forEach((off) => off());
+};
+
 /** Endpoints common enough to be worth not typing out. */
 export const PRESETS: ReadonlyArray<{
   label: string;
@@ -239,6 +366,38 @@ export const PRESETS: ReadonlyArray<{
     models: [],
   },
 ];
+
+/**
+ * What the panel is told while a voice turn happens.
+ *
+ * Distinct states rather than a boolean: recording ends when you let go, and
+ * transcription ends when it ends, and those feel different to wait through.
+ */
+export type VoiceState = "idle" | "recording" | "transcribing";
+
+/**
+ * Subscribes to push-to-talk events.
+ *
+ * Bundled so a caller cannot unsubscribe from the state and leak the transcript.
+ *
+ * `transcript` delivers the words to put in the input — not to send. Voice fills the
+ * box; asking is still the user's move, and a mis-transcription sent straight to a model
+ * is a wrong question asked confidently.
+ */
+export const onVoiceEvents = async (handlers: {
+  state: (state: VoiceState) => void;
+  transcript: (text: string) => void;
+  notice: (message: string) => void;
+  error: (message: string) => void;
+}): Promise<UnlistenFn> => {
+  const unlisten = await Promise.all([
+    listen<VoiceState>("magi://voice", (e) => handlers.state(e.payload)),
+    listen<string>("magi://transcript", (e) => handlers.transcript(e.payload)),
+    listen<string>("magi://voice-notice", (e) => handlers.notice(e.payload)),
+    listen<string>("magi://voice-error", (e) => handlers.error(e.payload)),
+  ]);
+  return () => unlisten.forEach((off) => off());
+};
 
 /** One history entry, as the backend expects it. */
 export type TurnMessage = { role: string; content: string };

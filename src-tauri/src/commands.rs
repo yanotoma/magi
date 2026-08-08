@@ -20,12 +20,21 @@ use crate::llm::cache::CapabilityCache;
 use crate::llm::capability::{assign, Capabilities, Tier};
 use crate::llm::provider::{Message, StopReason, StreamEvent, TurnRequest};
 use crate::llm::{discovery, preflight, prompt, registry};
+use crate::permissions::{self, Permission, PermissionKind};
+use crate::stt::model::{self, DownloadError, Model, Progress};
 
 /// Everything a command needs, assembled once at startup.
 pub struct AppState {
     /// One client, reused. Building a fresh one per call would discard the
     /// connection pool and the TLS session cache on every request.
     pub http: reqwest::Client,
+
+    /// A second client for the model download, which is blocking.
+    ///
+    /// Separate rather than shared because the two APIs are different types, not two
+    /// views of one. Built once for the same reason as the async one: a fresh client per
+    /// call would discard the connection pool and the TLS session cache.
+    pub http_blocking: reqwest::blocking::Client,
     pub config: Mutex<Config>,
     pub config_dir: PathBuf,
     /// `Arc` rather than `Box` so it can be cloned into a blocking task. Reading
@@ -50,6 +59,38 @@ pub struct AppState {
     /// Held in memory as well as on disk so a turn can read a tier without a file
     /// read on the way to every request.
     pub capabilities: Mutex<CapabilityCache>,
+
+    /// The microphone. Behind the trait, so a test or a future headless mode can
+    /// substitute a fake without this module knowing.
+    pub microphone: Box<dyn crate::audio::AudioSource>,
+
+    /// The speech model. Loads on first use, so holding one here costs nothing until
+    /// somebody speaks.
+    ///
+    /// Swappable, because the model and the language are settings. Built once at startup,
+    /// changing either in Settings would save the config, show the new value, and keep
+    /// transcribing with the old model until a restart — which is the kind of silent
+    /// wrongness this project spends its effort avoiding.
+    ///
+    /// An `Arc` inside the `Mutex` so a caller clones the pointer and releases the lock
+    /// before running inference. Holding it across a transcription would freeze Settings
+    /// for seconds, and a transcription already under way finishes with the model it
+    /// started on rather than being cut off.
+    pub transcriber: Mutex<Arc<dyn crate::stt::Transcriber>>,
+
+    /// Where speech models live: the app data directory plus `models/`.
+    ///
+    /// Separate from `config_dir` because these are a different kind of thing — a
+    /// 141 MB binary blob has no business next to a file the user is encouraged to open
+    /// in an editor and paste into bug reports.
+    pub models_dir: PathBuf,
+
+    /// Set while a model download is running.
+    ///
+    /// Guards against a second download of the same file: two writers appending to one
+    /// partial file produce a corrupt result of roughly the right size, and the only
+    /// thing that would notice is the checksum at the end.
+    pub downloading: Mutex<Option<Model>>,
 
     /// The task running the turn currently in flight, if any.
     ///
@@ -132,6 +173,48 @@ impl ModelCapabilityView {
             structured_output: capabilities.structured_output,
         }
     }
+}
+
+/// One speech model as the Voice pane renders it.
+#[derive(Debug, Clone, Serialize)]
+pub struct SpeechModelView {
+    pub id: Model,
+    pub label: String,
+    pub description: String,
+    /// Rounded for display. The real length comes from the server at download time —
+    /// see `Model::approximate_bytes`.
+    pub approximate_mb: u64,
+    /// Whether the file is already on disk.
+    pub downloaded: bool,
+    pub selected: bool,
+    /// Whether it understands languages other than English. The single most consequential
+    /// fact about a model here, because getting it wrong is silent.
+    pub multilingual: bool,
+}
+
+/// Everything the Voice pane needs in one shape.
+#[derive(Debug, Serialize)]
+pub struct VoiceView {
+    pub models: Vec<SpeechModelView>,
+
+    /// The languages Magi expects. Empty means detect from all of them.
+    pub languages: Vec<String>,
+
+    /// Set when the chosen model cannot honour the chosen language.
+    ///
+    /// An English-only model given anything else does not fail — it writes English words
+    /// that sound similar. So the combination is reported rather than left to produce a
+    /// confident wrong transcript.
+    pub language_ignored: bool,
+    /// Whether the selected model is ready to transcribe with.
+    pub ready: bool,
+    pub microphone: Permission,
+    /// What to tell the user about the microphone, and what they can do.
+    pub microphone_explanation: String,
+    /// The System Settings deep link for the microphone pane.
+    pub microphone_settings_url: String,
+    /// The model currently downloading, if any.
+    pub downloading: Option<Model>,
 }
 
 #[derive(Debug, Serialize)]
@@ -837,4 +920,219 @@ fn describe(reason: &StopReason) -> Option<String> {
         StopReason::MaxTokens => Some("The reply hit the length limit.".to_string()),
         StopReason::Other(other) => Some(format!("The model stopped: {other}")),
     }
+}
+
+/// Rebuilds the transcriber from the current config.
+///
+/// Called after anything that changes which model or language is in use. In one place so
+/// the two setters cannot drift, and so the reason lives once: the old transcriber holds a
+/// loaded model, and dropping it is what frees those hundreds of megabytes.
+fn rebuild_transcriber(state: &State<'_, AppState>) -> CommandResult<()> {
+    let (model, languages) = {
+        let config = state.config.lock().map_err(to_message)?;
+        (config.voice.model, config.voice.languages.clone())
+    };
+
+    let replacement: Arc<dyn crate::stt::Transcriber> = Arc::new(
+        crate::stt::WhisperTranscriber::new(model, &state.models_dir, languages),
+    );
+
+    *state.transcriber.lock().map_err(to_message)? = replacement;
+    tracing::info!(?model, "transcriber rebuilt");
+    Ok(())
+}
+
+/// Everything the Voice pane needs.
+///
+/// One command rather than several, because the pane's three facts — which models
+/// exist, which is chosen, and whether the microphone is available — are read together
+/// every time and a partial answer would render a half-built screen.
+#[tauri::command]
+pub fn get_voice(state: State<'_, AppState>) -> CommandResult<VoiceView> {
+    let selected = {
+        let config = state.config.lock().map_err(to_message)?;
+        config.voice.model
+    };
+
+    let downloading = state.downloading.lock().map_err(to_message)?.to_owned();
+
+    let models = Model::ALL
+        .iter()
+        .map(|&id| SpeechModelView {
+            id,
+            label: id.label().to_string(),
+            description: id.description().to_string(),
+            approximate_mb: id.approximate_bytes() / 1_000_000,
+            downloaded: id.path_in(&state.models_dir).exists(),
+            selected: id == selected,
+            multilingual: id.is_multilingual(),
+        })
+        .collect::<Vec<_>>();
+
+    let microphone = permissions::microphone();
+
+    let languages = {
+        let config = state.config.lock().map_err(to_message)?;
+        config.voice.languages.clone()
+    };
+
+    // A non-English selection on an English-only model. Not an error to refuse, because the
+    // user may be mid-way through changing both — but it must be visible.
+    let language_ignored = !selected.is_multilingual() && languages.iter().any(|code| code != "en");
+
+    Ok(VoiceView {
+        languages,
+        language_ignored,
+        ready: selected.path_in(&state.models_dir).exists(),
+        microphone,
+        microphone_explanation: microphone.explanation("Voice input"),
+        microphone_settings_url: permissions::settings_url(PermissionKind::Microphone).to_string(),
+        downloading,
+        models,
+    })
+}
+
+/// Chooses which model transcribes.
+///
+/// Allowed for a model that has not been downloaded yet. The alternative — refusing
+/// until the file exists — would mean picking `small.en` and then separately asking for
+/// it, when picking it *is* the request.
+#[tauri::command]
+pub fn set_speech_model(state: State<'_, AppState>, model: Model) -> CommandResult<VoiceView> {
+    {
+        let mut config = state.config.lock().map_err(to_message)?;
+        let previous = std::mem::replace(&mut config.voice.model, model);
+        if let Err(error) = config.save(&state.config_dir) {
+            config.voice.model = previous;
+            return Err(to_message(error));
+        }
+    }
+
+    rebuild_transcriber(&state)?;
+    get_voice(state)
+}
+
+/// Sets which languages Magi should expect.
+///
+/// Empty detects from all ninety-nine, one pins it, several restrict detection to those.
+/// The third is the useful case: unrestricted detection on a short utterance misreads it in
+/// ways a person would not, and naming the two or three you actually speak removes the rest
+/// without committing to either.
+#[tauri::command]
+pub fn set_voice_languages(
+    state: State<'_, AppState>,
+    languages: Vec<String>,
+) -> CommandResult<VoiceView> {
+    {
+        let mut config = state.config.lock().map_err(to_message)?;
+        let previous = std::mem::replace(&mut config.voice.languages, languages);
+        if let Err(error) = config.save(&state.config_dir) {
+            config.voice.languages = previous;
+            return Err(to_message(error));
+        }
+    }
+
+    rebuild_transcriber(&state)?;
+    get_voice(state)
+}
+
+/// Downloads a speech model, reporting progress on `magi://model-download`.
+///
+/// Runs on a blocking task: it is a long transfer that streams to disk, and the
+/// download itself is synchronous. Returning as soon as it is under way rather than
+/// awaiting it would leave the UI with nothing to show, so this one does await — the
+/// progress events are what keep the panel informed meanwhile.
+#[tauri::command]
+pub async fn download_speech_model(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    model: Model,
+) -> CommandResult<VoiceView> {
+    // One download at a time. Two writers appending to one partial file produce a
+    // corrupt result of roughly the right length, and only the checksum would notice.
+    {
+        let mut slot = state.downloading.lock().map_err(to_message)?;
+        if let Some(running) = *slot {
+            return Err(format!(
+                "{} is already downloading. Wait for it to finish.",
+                running.label()
+            ));
+        }
+        *slot = Some(model);
+    }
+
+    let dir = state.models_dir.clone();
+    let http = state.http_blocking.clone();
+    let emitter = app.clone();
+
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        // Emitted only when the whole-number percentage changes. The read loop hands over
+        // a progress value every 256 kB, which for a 488 MB model is nearly two thousand
+        // events — and a bar cannot show more than a hundred distinct states, so the rest
+        // is IPC traffic and reactive updates with no visible effect.
+        let mut last_percent = u8::MAX;
+
+        model::download(&http, model, &dir, |progress: Progress| {
+            let percent = progress.percent();
+            if percent != last_percent {
+                last_percent = percent;
+                // A dropped listener is not a reason to stop: the user may simply have
+                // closed Settings, and abandoning a 488 MB download because nobody is
+                // watching the bar would be its own bug.
+                let _ = emitter.emit("magi://model-download", progress);
+            }
+            true
+        })
+    })
+    .await;
+
+    // Cleared before the result is inspected, so a failure cannot leave the guard set
+    // and block every later attempt.
+    if let Ok(mut slot) = state.downloading.lock() {
+        *slot = None;
+    }
+
+    let _ = app.emit("magi://model-download-done", ());
+
+    match result.map_err(to_message)? {
+        Ok(path) => {
+            tracing::info!(path = %path.display(), "speech model ready");
+            get_voice(state)
+        }
+        Err(DownloadError::Cancelled) => get_voice(state),
+        Err(error) => Err(to_message(error)),
+    }
+}
+
+/// Deletes a downloaded model.
+///
+/// Worth having: `medium.en` is 1.4 GB, and an app that can put that on your disk and
+/// not take it off again is an app that quietly costs you space forever.
+#[tauri::command]
+pub fn remove_speech_model(state: State<'_, AppState>, model: Model) -> CommandResult<VoiceView> {
+    let path = model.path_in(&state.models_dir);
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(to_message)?;
+        tracing::info!(path = %path.display(), "speech model deleted");
+    }
+    // The partial goes too, or a resumed download would continue onto a file the user
+    // asked to be rid of.
+    let _ = std::fs::remove_file(model.partial_path_in(&state.models_dir));
+
+    get_voice(state)
+}
+
+/// Opens the System Settings pane for a permission.
+///
+/// Through the OS rather than by instructing the user to navigate there. Sending
+/// someone to the top of Privacy & Security and expecting them to find Microphone is
+/// most of the difficulty of granting a permission.
+#[tauri::command]
+pub fn open_permission_settings(kind: PermissionKind) -> CommandResult<()> {
+    let url = permissions::settings_url(kind);
+    std::process::Command::new("open")
+        .arg(url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("could not open System Settings: {e}"))
 }

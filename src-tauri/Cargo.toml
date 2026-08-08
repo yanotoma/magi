@@ -1,6 +1,6 @@
 [package]
 name = "magi"
-version = "0.2.0-alpha.2"
+version = "0.3.0-alpha.1"
 description = "A background AI agent for your desktop"
 authors = ["The Magi contributors"]
 license = "Apache-2.0"
@@ -36,7 +36,9 @@ async-trait = "0.1"
 futures-util = { version = "0.3", default-features = false }
 # rustls rather than the system TLS stack: one fewer thing that differs
 # between a developer machine, a CI runner, and a user's Mac.
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+# `blocking` for the model download: it streams straight to disk, so async buys
+# nothing there and would need a runtime to test. Everything else uses the async API.
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "blocking"] }
 tokio = { version = "1", features = ["sync", "macros", "rt"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -51,13 +53,53 @@ keyring = { version = "3", features = ["apple-native"] }
 png = { version = "0.17", default-features = false }
 # Both families send images base64-encoded; they disagree only on the wrapper.
 base64 = "0.22"
+# Microphone capture. `default` is empty, so no feature list is needed — CoreAudio
+# is built in on macOS. NOTE 0.18 behavioural breaks: streams no longer auto-start
+# (call stream.play()), the default config no longer returns 44.1 kHz, and I32/I24
+# now outrank I16 in format selection. See .claude/skills/audio-stt/SKILL.md.
+cpal = "0.18"
+# Speech-to-text. Compiles whisper.cpp, so this is the first compile-time C++
+# toolchain dependency Magi has: `cmake` must be on PATH.
+#
+# Feature-gating the whole crate so `cargo test` could skip it was tempting and
+# rejected: a build that compiles the real transcriber only when someone remembers
+# a flag is a build where it is usually not compiled, and the first person to find
+# out is a user. `metal` is target-gated below instead.
+#
+# `tracing_backend` routes whisper.cpp's own log output into `tracing` rather than
+# stderr, so the C++ layer complains in the same place as everything else.
+whisper-rs = { version = "0.16", features = ["tracing_backend"] }
+# Verifies the downloaded speech model against the checksum from HuggingFace's API.
+sha2 = "0.10"
 thiserror = "2"
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Metal does not exist off macOS, so the acceleration feature is target-gated
+# rather than unconditional. Cargo unions features across these tables, so the
+# macOS build gets `metal` on top of the list above and the Linux CI job compiles
+# whisper.cpp without it — slower on a cold cache, and correct.
+[target.'cfg(target_os = "macos")'.dependencies]
+whisper-rs = { version = "0.16", features = ["metal"] }
+# Reads microphone authorisation without triggering the prompt, so Settings can show
+# the current state rather than "we will find out when you try". Version 0.3 matches
+# the objc2 family Tauri and cpal already pull in. Only the two features that are
+# used: the crate covers all of AVFoundation otherwise.
+#
+# The alternative was hand-rolled `msg_send!` against AVCaptureDevice, which is a
+# selector name and a return type to get subtly wrong in `unsafe` code — the typed
+# binding costs one dependency from a family already present.
+objc2-av-foundation = { version = "0.3", default-features = false, features = [
+  "AVCaptureDevice",
+  "AVMediaFormat",
+] }
 
 [dev-dependencies]
 # #[tokio::test] needs a runtime the library itself does not pull in.
 tokio = { version = "1", features = ["macros", "rt"] }
 # Config tests write to a throwaway directory rather than the real config dir.
 tempfile = "3"
+# Reads the fixture WAV the fake AudioSource replays. Small, pure Rust, does one
+# thing — and a dev-dependency because nothing in the shipped app reads WAV files.
+hound = "3"

@@ -5,7 +5,7 @@ Complete breakdown of what is done and what is pending, across every milestone.
 **Last updated:** 2026-08-07
 **Current phase:** M4 — audio and speech-to-text, targeting `0.3.0-alpha.1`
 **Current version:** `0.2.0-alpha.2` (released — see [VERSIONING.md](VERSIONING.md))
-**Overall:** 71 / 144 tasks done (49%)
+**Overall:** 98 / 157 tasks done (62%)
 
 Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 
@@ -19,11 +19,11 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 | **M1** | Shell — tray, hotkey, windows | `0.1.0-alpha.1` | 15 | 16 | ✅ Shipped |
 | **M2** | Config & providers | `0.2.0-alpha.1` | 28 | 28 | ✅ Shipped |
 | **M3** | Pre-flight & capability tiers | `0.2.0-alpha.2` | 13 | 14 | ✅ Shipped |
-| **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 0 | 14 | 🔨 Next |
+| **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 27 | 27 | ✅ Shipped |
 | **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 0 | 13 | ⬜ |
 | **M6** | Session machine & panel UX | `0.5.0-beta.1` | 0 | 16 | ⬜ |
 | **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 14 | ⬜ |
-| — | **v1 total** | `1.0.0` | **71** | **130** | |
+| — | **v1 total** | `1.0.0` | **98** | **143** | |
 | **M8** | v2 — wake word & TTS | `1.1.0` | 0 | 9 | 🔮 Post-v1 |
 | **M9** | v3 — computer use | `1.2.0` | 0 | 5 | 🔮 Post-v1 |
 
@@ -157,22 +157,44 @@ Two bugs the milestone only surfaced when run, both worth remembering:
 ## M4 — Audio & speech-to-text
 
 **Capture**
-- [ ] `audio` module — enumerate input devices via `cpal`
-- [ ] Open the default input and buffer PCM while recording
-- [ ] Resample to 16 kHz mono (Whisper's required input format)
-- [ ] Cap recording length and handle the buffer-full case
-- [ ] `AudioSource` trait plus a fake that replays a fixture WAV
-- [ ] Handle device disconnect mid-recording
+- [x] `audio` module — enumerate input devices via `cpal`. `device.description()?.name()`, not the `name()` that older examples use
+- [x] Open the default input and buffer PCM while recording. The rate and format are pinned from `supported_input_configs` rather than taken from `default_input_config()`, whose selection order changed in 0.18 — and `stream.play()` is called, without which the callback never fires and the recording is silence with no error
+- [x] Resample to 16 kHz mono (Whisper's required input format), low-passed before interpolating. Without the filter, 48→16 kHz folds everything above 8 kHz down into the audible range; a test asserts a 15 kHz tone comes out attenuated rather than relocated to 1 kHz. `rubato` was rejected as far more than one fixed speech conversion needs — see the plan
+- [x] Cap recording length and handle the buffer-full case. Reaching the cap **stops and transcribes** rather than discarding: the user said something, and the last thing to do with it is throw it away because they said too much
+- [x] `AudioSource` trait plus a fake. The trait promises **16 kHz mono `f32`**, not "whatever the device gave us" — so the fake and the real implementation return the same thing and a fixture exercises the same code path a microphone would, rather than a parallel one
+- [x] Handle device disconnect mid-recording. Flagged from the error callback and read on stop, so unplugging a microphone mid-sentence returns the sentence. `ErrorKind::Xrun` is deliberately not treated as a disconnection: it is a dropout on a stream that is still alive
+
+**Push-to-talk**
+
+These were missing from the list, not from the plan. M4's checkboxes enumerated the components and forgot the wiring, so the milestone reached 19/19 with `Microphone` and `WhisperTranscriber` never constructed anywhere in the app — the capability existed and nothing called it. `VERSIONING.md` promises `0.3.0-alpha.1` is "speak, get a local transcript", and a checklist is not the contract.
+
+Deliberately not the session state machine, which is M6's. This is the smallest wiring that makes the promise true.
+
+- [x] A **second** hotkey for voice (`Alt+Shift+Space`), configurable, rather than overloading the toggle. Distinguishing a tap from a hold on one key means the panel toggle fires on release and behind a timer, which would degrade the one interaction that already works. Two identical shortcuts are refused at load: the OS gives the combination to whichever registered first and the other silently never fires
+- [x] Hold to record, release to transcribe, with the transcript **appended** to whatever is already in the input. Someone who typed half a question and spoke the rest meant both
+- [x] Transcription on `spawn_blocking`. On the main thread it would freeze the tray and the hotkey; on an async worker it would hold a runtime thread for its whole duration
+- [x] Panel indicator with two distinct states. Recording ends when you let go and transcription ends when it ends, so being told which you are waiting for is the difference between patience and wondering whether the key registered. The dot is red only while audio is actually going in
 
 **Transcription**
-- [ ] `stt` module — `whisper-rs` integration
-- [ ] Verify the cmake build works on Apple Silicon and Intel
-- [ ] Enable Metal acceleration on macOS
-- [ ] First-run model download with progress, resumable, checksum-verified
-- [ ] Model selection in Settings (`base.en` default, `small`, `medium`)
-- [ ] Run inference on `spawn_blocking` — it is CPU-bound and long
-- [ ] `Transcriber` trait plus a fake
-- [ ] Microphone permission request and denial handling
+- [x] `stt` module — `whisper-rs` integration. Written against the 0.16 source, whose segment API is an iterator of `WhisperSegment` rather than the `full_get_segment_text(i)` that documentation still shows
+- [x] Verify the cmake build works on Apple Silicon (whisper.cpp compiles in about two minutes; `.cargo/config.toml` links `libc++` and Accelerate). Intel is untested — no machine to try it on, and the same flags are configured for `x86_64-apple-darwin`
+- [x] Enable Metal acceleration on macOS, target-gated so the Linux CI job compiles whisper.cpp without it. Feature-gating the whole crate to keep `cargo test` free of cmake was rejected: a build that compiles the real transcriber only when someone remembers a flag is one where it is usually not compiled
+- [x] First-run model download with progress, resumable, checksum-verified. The resume path was verified against the real endpoint by seeding a 20 MB partial file and confirming the completed download passed its checksum — that is the one failure a happy-path test cannot catch, since resuming from a wrong offset yields a file of exactly the right length and the wrong contents
+- [x] Verify against the checksum from HuggingFace's API, **never the ETag** on the download URL. Both are 64 hex characters and they are different values, so the wrong one fails every download on every machine and reads as a corrupt network
+- [x] Trust the server's `content-length` rather than a hardcoded size. Two of the size constants were initially wrong by ~12 kB, which would have made a *completed* download look longer than the model and be discarded on every attempt, forever
+- [x] Model selection in Settings → Voice, with a real progress bar and byte counts. Selecting a model that is not downloaded is allowed — refusing until the file exists would mean picking Small and then separately asking for it, when picking it *is* the request
+- [x] Microphone permission shown as a live status row, with a button to the right System Settings pane — offered only when it would help, since `restricted` opens a toggle the user cannot move
+- [x] Delete a downloaded model. `medium.en` is 1.4 GB, and an app that can put that on your disk and not take it off again quietly costs you space forever
+- [x] `Transcriber::transcribe` is synchronous so the `spawn_blocking` obligation is explicit at the call site; inference uses half the cores rather than all of them, since Magi transcribes while the user is still working
+- [x] `Transcriber` trait plus a fake. Synchronous on purpose — inference is CPU-bound for seconds, so making it `async` would suggest it yields when it would in fact occupy a runtime thread throughout. Rejects Whisper's known silence artefacts ("Thank you.", "[BLANK_AUDIO]"), matched on the whole string so a real question containing a polite phrase survives
+- [x] Microphone permission request and denial handling. `NSMicrophoneUsageDescription` in a `src-tauri/Info.plist` that Tauri merges — without it the process is **terminated** on first microphone access, with no exception and nothing on screen for a tray app. The state is read without prompting via `AVCaptureDevice.authorizationStatusForMediaType`, so Settings shows what is true rather than finding out when a recording fails
+- [x] Distinguish *not yet asked* from *denied* from *restricted*. The untouched state is the intended path, not a failure, and must not read as one; a Mac managed by a configuration profile cannot be fixed in System Settings, so pointing there would send the user somewhere useless
+
+**Language shortlist**
+- [x] Settings → Voice shows a checkbox list of languages in place of a single dropdown — leave it empty to detect from all ~99, tick one to pin it, or tick several to restrict detection to your shortlist. Unrestricted detection on a short utterance can misidentify two seconds of Spanish as French; constraining the candidates removes the miss
+- [x] English-only models (`.en`) say so in Settings and note the language shortlist is not active — they cannot transcribe anything else, so appearing to honour the setting would be a promise they cannot keep
+- [x] The old `voice.language` key in `config.toml` is read automatically on first launch and converted to the new `voice.languages` list, so configs written before this change need no edits
+- [x] `config.toml` validation catches unrecognised language codes, lists longer than eight entries, and duplicates, reporting each as a distinct error
 
 ---
 
@@ -272,7 +294,7 @@ Project-local skills exist so future sessions don't re-derive version-specific t
 | `svelte-5` | ✅ | Runes vs Svelte 4, `.svelte.ts`, Tauri IPC import paths |
 | `llm-providers` | ✅ | Provider protocol families, vision/tool/stream formats, pre-flight probes |
 | `macos-permissions` | ✅ | TCC, Info.plist, signing, notarization, sidecar signing |
-| `audio-stt` | M4 | cpal device handling, resampling, whisper-rs build and Metal |
+| `audio-stt` | ✅ | cpal 0.18 behavioural breaks, the 16 kHz contract, the realtime callback, whisper-rs build and Metal, and the model download whose obvious checksum is the wrong value |
 | `screen-capture` | M5 | xcap, multi-display, downscaling for vision cost |
 | `release` | M7 | Tag → universal build → sign → notarize → staple → GitHub release → updater |
 | `wake-word` | M8 | openWakeWord ONNX via `ort`, false-positive tuning |
@@ -303,3 +325,49 @@ Recorded so they are not re-proposed.
 - [ ] Linux packaging
 - [ ] Issue and PR templates
 - [ ] Community wake-word model contributions
+
+---
+
+## Deferred: code-switching within one recording
+
+Also outside the summary table, for the reason given below.
+
+**Open question, not a known defect.** Whisper decides the language once, on the first
+window, and that decision governs the whole recording — `whisper_full` runs its detect
+before the main loop, and `detect_among` likewise inspects offset 0 only. So a shortlist
+answers "which of my languages is this recording in", not "which language is this
+sentence in". Someone speaking Spanish and English in the same breath gets one governing
+language either way.
+
+What is unknown is how much that costs in practice, and there is reason to think the
+answer is "little": the language token conditions the decoder rather than binding it —
+a multilingual model pinned to `en` and handed clear Spanish transcribed it as Spanish
+anyway when this was tested — and `set_translate(false)` means nothing is rendered into
+the governing language on purpose. Mixed speech may well survive intact.
+
+Do not act on that reasoning without measuring it. Four cases worth running against
+`ggml-base.bin`: Spanish-dominant with English phrases, English-dominant with Spanish
+phrases, and a hard switch mid-recording in both orders — the last two built by
+concatenating clips from two voices, so each half has native pronunciation rather than
+one voice's phonetics applied to the other language. The pair of hard switches is the
+informative one: it separates "whichever language starts wins" from "overall content
+wins", and only the first of those would mean a user has to think about word order.
+
+- [ ] Measure code-switched transcription across those four cases and record the result
+      here. If mixed speech degrades, the fix is not a better shortlist — per-segment
+      detection means re-running detection per window and accepting that a segment
+      boundary can land mid-sentence
+
+## Deferred: native audio input
+
+Outside the summary table on purpose: `tools/task_counts.py` only counts sections whose
+heading starts with a milestone number, so nothing here inflates a denominator for work
+that is not scheduled. Ticking a box in this section will not move the totals — move the
+task into a milestone when it is scheduled, and the count follows.
+
+**Design decision — local STT is the intended path, not a fallback.** Whether Magi could detect native audio support and route voice input directly to a capable model was considered and deliberately deferred. Local whisper.cpp transcription is the *design* for three reasons: the design doc and Settings copy commit to local-only processing ("Transcription happens on this Mac. Nothing you say is sent anywhere"); `voice.rs` puts the transcript in the panel input so a mis-transcription can be corrected before it reaches the model — native audio input removes that review step; and most target providers (Ollama, LM Studio, local runtimes) accept no audio at all, so a primary path that depends on native support inverts the model-agnostic goal. The useful extension is detection and opt-in bypass for providers that genuinely support it, not a default replacement.
+
+- [ ] Add a `hears` field to `Capabilities` in `src-tauri/src/llm/capability.rs`, recorded by the pre-flight probe and displayed in Settings alongside `vision`, `tools`, and `structured_output`. The field must not affect tier assignment — exact precedent is `structured_output`, documented "Recorded but not used for tier assignment; see [`Tier`]. It is shown in Settings because it explains capabilities that arrive in later milestones."
+- [ ] Commit a small pre-recorded speech asset to `assets/probe/` — a single spoken word, ~16 kHz mono WAV, ≤ 50 KB — for use by the audio probe. A synthetic tone is not sufficient: a provider that accepts an audio payload and ignores it must fail the probe, so only a probe that sends recognizable speech and checks the transcript can distinguish "accepting" from "hearing". The vision probe applies the same logic: it generates a digit image locally and asks the model to read back a specific digit.
+- [ ] Implement the audio probe: send the committed asset to the provider and ask what word was spoken; set `hears: true` only if the response names the word. Follow the architecture of the vision probe in `src-tauri/src/llm/probe.rs`.
+- [ ] Add an opt-in "Send audio directly to model" toggle in Settings, off by default, visible only when the active model's `hears` field is `true`. When on, voice input bypasses whisper.cpp and sends the raw audio to the provider. The setting's description must state explicitly what this trades: the local-only privacy promise (audio leaves the device) and the transcript review step (a mis-transcription becomes a confident wrong question). Off by default and honest about the trade-off are not negotiable — local STT is the design; direct audio is the exception.

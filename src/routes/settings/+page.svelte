@@ -10,7 +10,18 @@
     setHotkey,
     discoverModels,
     runPreflight,
+    getVoice,
+    setSpeechModel,
+    setVoiceLanguages,
+    LANGUAGES,
+    downloadSpeechModel,
+    removeSpeechModel,
+    openPermissionSettings,
+    onDownloadProgress,
     type ModelCapability,
+    type VoiceView,
+    type SpeechModel,
+    type DownloadProgress,
     MAX_PROMPT_CONTEXT,
     PRESETS,
     type ConfigView,
@@ -21,11 +32,12 @@
   import { acceleratorFrom, describeShortcut } from "$lib/shortcut";
   import Icon from "$lib/Icon.svelte";
 
-  type Pane = "general" | "models" | "hotkeys";
+  type Pane = "general" | "models" | "voice" | "hotkeys";
 
   const PANES: ReadonlyArray<{ id: Pane; label: string }> = [
     { id: "general", label: "General" },
     { id: "models", label: "Models" },
+    { id: "voice", label: "Voice" },
     { id: "hotkeys", label: "Hotkeys" },
   ];
 
@@ -42,6 +54,23 @@
   let discovering = $state(false);
   let discovered = $state<string | null>(null);
   let capturing = $state(false);
+
+  let voice = $state<VoiceView | null>(null);
+  let progress = $state<DownloadProgress | null>(null);
+  let voiceError = $state<string | null>(null);
+
+  /** Which model this window is downloading, tracked locally.
+   *
+   *  Not read from `voice.downloading`, and that was a real bug rather than a
+   *  preference: `downloadSpeechModel` awaits the entire transfer before returning a
+   *  fresh view, so `voice` stays the object from before the click for the whole
+   *  download — with `downloading` still null. The bar was gated on backend state the
+   *  frontend could not see until it no longer mattered, and appeared for an instant at
+   *  the end.
+   *
+   *  The side that started the download already knows it started. The same mistake as
+   *  gating the panel's cancelled state on an event from a task that had been aborted. */
+  let downloadingHere = $state<SpeechModel | null>(null);
 
   /** Which model is being probed, or null.
    *
@@ -178,6 +207,88 @@
     clearTimeout(contextTimer);
     contextTimer = setTimeout(flushContext, 600);
   };
+
+  const loadVoice = async () => {
+    try {
+      voice = await getVoice();
+    } catch (e) {
+      voiceError = String(e);
+    }
+  };
+
+  // Read once on mount, and again whenever the pane is opened: the microphone
+  // permission can change in System Settings while this window sits in the
+  // background, and a stale "blocked" row would have the user granting it twice.
+  $effect(() => {
+    if (pane === "voice") loadVoice();
+  });
+
+  // Progress arrives whether or not this pane is open, so the subscription is not tied
+  // to it — a download started and then navigated away from still finishes, and coming
+  // back should find the bar where it actually is.
+  $effect(() => {
+    let stop: (() => void) | undefined;
+    onDownloadProgress({
+      progress: (p) => (progress = p),
+      done: () => {
+        progress = null;
+        loadVoice();
+      },
+    }).then((off) => (stop = off));
+    return () => stop?.();
+  });
+
+  const runVoice = async (action: () => Promise<VoiceView>) => {
+    voiceError = null;
+    try {
+      voice = await action();
+    } catch (e) {
+      voiceError = String(e);
+    }
+  };
+
+  /** Starts a download and shows it immediately. */
+  const download = async (model: SpeechModel) => {
+    downloadingHere = model;
+    progress = null;
+    voiceError = null;
+    try {
+      voice = await downloadSpeechModel(model);
+    } catch (e) {
+      voiceError = String(e);
+    } finally {
+      // Cleared whatever happened, so a failure cannot leave the row stuck showing a
+      // download that is no longer running.
+      downloadingHere = null;
+      progress = null;
+    }
+  };
+
+  /** The display name for a language code, falling back to the code itself.
+   *
+   *  A config written by hand can name a language whose code Magi has no entry for.
+   *  Whisper still understands it, so showing the raw code is more honest than pretending
+   *  the setting is empty. */
+  const labelFor = (code: string): string =>
+    LANGUAGES.find((language) => language.code === code)?.label ?? code;
+
+  /** Adds or removes a language from the shortlist.
+   *
+   *  Sent as a whole list rather than as a delta, so the backend never has to reconcile
+   *  two views of the same setting — and a click that fails leaves the config exactly as
+   *  it was rather than half-applied. */
+  const toggleLanguage = (code: string) => {
+    const current = voice?.languages ?? [];
+    const next = current.includes(code)
+      ? current.filter((c) => c !== code)
+      : [...current, code];
+    runVoice(() => setVoiceLanguages(next));
+  };
+
+  const percent = (p: DownloadProgress): number =>
+    p.total === 0 ? 0 : Math.min(100, Math.round((p.downloaded / p.total) * 100));
+
+  const megabytes = (bytes: number): string => `${Math.round(bytes / 1_000_000)} MB`;
 
   /** Probe results for one model, or undefined when it has not been tested. */
   const capabilityFor = (
@@ -529,6 +640,185 @@
         <p class="hint">
           Safe to share: API keys are in the macOS keychain, never in this file.
         </p>
+      {/if}
+    {/if}
+
+    {#if pane === "voice"}
+      <h2>Microphone</h2>
+      {#if voice}
+        <!--
+          A status row rather than a message that appears when something fails. Every
+          macOS permission fails silently, so the only way a user learns the state is
+          by being shown it.
+        -->
+        <div class="perm-row">
+          <span class="badge {voice.microphone}">{voice.microphone.replace("-", " ")}</span>
+          <span class="hint">{voice.microphone_explanation}</span>
+        </div>
+
+        <!--
+          Offered only where it helps. `restricted` means a configuration profile on a
+          managed Mac, and the pane it would open holds a toggle the user cannot move.
+        -->
+        {#if voice.microphone === "denied"}
+          <button type="button" onclick={() => openPermissionSettings("microphone")}>
+            Open Privacy &amp; Security
+          </button>
+        {/if}
+
+        <h2 class="spaced">Languages</h2>
+        <p class="hint">
+          {#if voice.languages.length === 0}
+            Detecting from all languages Magi knows. Ticking the ones you actually speak
+            makes it harder to mishear you — a short phrase is sometimes read as a
+            language nobody in the room speaks.
+          {:else if voice.languages.length === 1}
+            Always transcribing as {labelFor(voice.languages[0])}. No detection, so nothing
+            to get wrong.
+          {:else}
+            Detecting between these {voice.languages.length}, and nothing else.
+          {/if}
+        </p>
+
+        <!--
+          Checkboxes rather than a dropdown, because the length of the selection is the
+          setting: none, one, or a few behave differently and a single-select cannot say
+          "either of these two".
+        -->
+        <ul class="languages">
+          {#each LANGUAGES as language (language.code)}
+            <li>
+              <label class="checkbox">
+                <input
+                  type="checkbox"
+                  checked={voice.languages.includes(language.code)}
+                  onchange={() => toggleLanguage(language.code)}
+                />
+                {language.label}
+              </label>
+            </li>
+          {/each}
+        </ul>
+
+        {#if voice.languages.length > 0}
+          <button type="button" class="link" onclick={() => runVoice(() => setVoiceLanguages([]))}>
+            Detect from all languages instead
+          </button>
+        {/if}
+
+        <!--
+          The trap this exists to close. An English-only model given Spanish does not
+          fail — it writes English words that sound similar — so the combination has to
+          be said out loud rather than left to produce a confident wrong transcript.
+        -->
+        {#if voice.language_ignored}
+          <p class="error" role="alert">
+            The selected model understands English only, so these languages are ignored.
+            Pick a multilingual model below.
+          </p>
+        {/if}
+
+        <h2 class="spaced">Speech model</h2>
+        <p class="hint">
+          Transcription happens on this Mac. Nothing you say is sent anywhere.
+        </p>
+
+        {#if voiceError}
+          <p class="error" role="alert">{voiceError}</p>
+        {/if}
+
+        <ul class="speech-models">
+          {#each voice.models as model (model.id)}
+            <li>
+              <div class="row">
+                <button
+                  type="button"
+                  class="speech-choice"
+                  class:selected={model.selected}
+                  onclick={() => runVoice(() => setSpeechModel(model.id))}
+                >
+                  <span class="bullet" aria-hidden="true">{model.selected ? "●" : ""}</span>
+                  <span class="ident">
+                    <strong>{model.label}</strong>
+                    {#if !model.multilingual}
+                      <!-- Marked in the row as well as the label, because the label is
+                           what someone reads and the badge is what they notice. -->
+                      <span class="badge">EN</span>
+                    {/if}
+                    <span class="hint">{model.description}</span>
+                  </span>
+                </button>
+
+                <div class="actions">
+                  {#if downloadingHere === model.id}
+                    <span class="hint">
+                      {progress ? `${percent(progress)}%` : "Connecting…"}
+                    </span>
+                  {:else if model.downloaded}
+                    <span class="badge granted">On disk</span>
+                    <button
+                      type="button"
+                      class="icon danger"
+                      title="Delete {model.label}"
+                      aria-label="Delete {model.label}"
+                      onclick={() => runVoice(() => removeSpeechModel(model.id))}
+                    >
+                      <Icon name="trash" />
+                    </button>
+                  {:else}
+                    <button
+                      type="button"
+                      disabled={downloadingHere !== null}
+                      onclick={() => download(model.id)}
+                    >
+                      Download {megabytes(model.approximate_mb * 1_000_000)}
+                    </button>
+                  {/if}
+                </div>
+              </div>
+
+              {#if downloadingHere === model.id}
+                <!--
+                  A real bar, not a spinner. 488 MB deserves to be told how far along it
+                  is, and the byte counts are what make a stalled download visible where a
+                  spinner would look identical either way.
+
+                  Shown from the click, not from the first byte: the gap while the request
+                  is opening is exactly when someone wonders whether their click worked.
+                  An indeterminate stripe covers it.
+                -->
+                <div
+                  class="bar"
+                  class:indeterminate={!progress}
+                  role="progressbar"
+                  aria-valuenow={progress ? percent(progress) : undefined}
+                >
+                  <div
+                    class="bar-fill"
+                    style={progress ? `width: ${percent(progress)}%` : ""}
+                  ></div>
+                </div>
+                <p class="hint">
+                  {#if progress}
+                    {megabytes(progress.downloaded)} of {megabytes(progress.total)} —
+                    leaving this screen will not stop it
+                  {:else}
+                    Opening the connection…
+                  {/if}
+                </p>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+
+        {#if !voice.ready}
+          <p class="hint">
+            The selected model is not downloaded yet, so voice input is unavailable
+            until it is.
+          </p>
+        {/if}
+      {:else if voiceError}
+        <p class="error" role="alert">{voiceError}</p>
       {/if}
     {/if}
 
@@ -1222,7 +1512,13 @@
     gap: 7px;
   }
 
-  input,
+  /* `:not([type="checkbox"])`, because everything below is written for a field you type
+     into. A checkbox given a background, a border and 5px of padding stops being the
+     platform's control: the box inflates, a second rectangle draws around the tick, and
+     the accent colour and dark-mode treatment macOS would have supplied are lost.
+     Excluding it is better than undoing it afterwards — the native control is never
+     touched, so there is nothing to keep in sync. */
+  input:not([type="checkbox"]),
   select,
   textarea {
     background: Field;
@@ -1443,6 +1739,120 @@
     /* A long model id wraps rather than stretching the card sideways — OpenRouter
        ids like "meta-llama/llama-3.3-70b-instruct:free" are routinely this long. */
     overflow-wrap: anywhere;
+  }
+
+  .perm-row {
+    align-items: baseline;
+    display: flex;
+    gap: var(--gap-sm);
+    margin-bottom: var(--gap-sm);
+  }
+
+  /* The permission states, using the same tone scale as the capability tiers so a
+     colour means one thing across the whole app. Always beside a written label. */
+  .badge.granted {
+    background: var(--tone-good);
+  }
+
+  .badge.denied,
+  .badge.restricted {
+    background: var(--tone-bad);
+  }
+
+  .badge.not-asked {
+    background: var(--tone-neutral);
+  }
+
+  /* Two columns: twelve languages down one column pushes the model list off screen, and
+     the list is scanned rather than read in order. */
+  .languages {
+    columns: 2;
+    list-style: none;
+    margin: var(--gap-sm) 0;
+    padding: 0;
+  }
+
+  .languages li {
+    padding: 1px 0;
+  }
+
+  .speech-models {
+    list-style: none;
+    margin: var(--gap-sm) 0 0;
+    padding: 0;
+  }
+
+  .speech-models li {
+    border-top: 1px solid var(--line);
+    padding: var(--gap-md) 0;
+  }
+
+  .speech-models li:first-child {
+    border-top: none;
+  }
+
+  /* The name and its trade-off are one target: choosing a model is the action, and a
+     separate radio would be a smaller thing to hit for the same result. */
+  .speech-choice {
+    align-items: baseline;
+    background: none;
+    border: none;
+    color: inherit;
+    display: flex;
+    flex: 1;
+    font: inherit;
+    gap: 6px;
+    min-width: 0;
+    padding: 0;
+    text-align: left;
+  }
+
+  .speech-choice:hover {
+    background: none;
+  }
+
+  .speech-choice.selected strong {
+    color: AccentColor;
+  }
+
+  .bar {
+    background: var(--line);
+    border-radius: var(--radius-control);
+    height: 5px;
+    margin-top: var(--gap-sm);
+    overflow: hidden;
+  }
+
+  /* Before the first byte, the bar has nothing to measure. A sliding stripe says
+     "working" without claiming a position it does not know. */
+  .bar.indeterminate .bar-fill {
+    animation: sliding 1.1s ease-in-out infinite;
+    width: 40%;
+  }
+
+  @keyframes sliding {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(250%);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .bar.indeterminate .bar-fill {
+      animation: none;
+      width: 100%;
+      opacity: 0.4;
+    }
+  }
+
+  .bar-fill {
+    background: AccentColor;
+    height: 100%;
+    /* Eased, because progress arriving in 256 kB chunks would otherwise step visibly
+       rather than move. */
+    transition: width 200ms linear;
   }
 
   /* The capability matrix. A table because it is one: models down, capabilities

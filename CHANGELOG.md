@@ -6,6 +6,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.3.0-alpha.1] - 2026-08-08
+
+### Added
+- **Speak any language.** Magi detects it by default — Spanish, Portuguese, Japanese, about ninety-nine of them — and transcribes in the language you spoke rather than translating. Settings → Voice can pin one if you always use the same
+- **Language shortlist.** If auto-detection gets a short utterance wrong — two seconds of Spanish came back as French at p=0.18 — you can tell Magi which languages you actually speak. Settings → Voice shows a checkbox list: leave it empty to detect from all ninety-nine, tick one to pin it, or tick a few to restrict detection to your choices
+- **Talk to Magi.** Hold `Alt+Shift+Space`, say something, let go. It transcribes on your Mac and puts the words in the panel's input — you still decide whether to send them. Configurable, and separate from the panel shortcut so neither has to be timed
+- **Local speech-to-text.** Settings → Voice picks a model — Base, Small or Medium — downloads it with a progress bar, and shows whether your microphone is available. Transcription runs entirely on your Mac; no audio is sent anywhere
+- The microphone permission is shown as a live status row rather than discovered when a recording fails, with a button that opens the right System Settings pane
+- Downloaded models can be deleted again
+
+### Changed
+- `voice.language` in `config.toml` is now `voice.languages` (a list of ISO 639-1 codes). Existing configs are migrated automatically on first launch — no edits needed
+- macOS 11 (Big Sur) is now the minimum. The speech engine needs a newer system library than Tauri's default of macOS 10.13 allowed, and 11 is the first release that runs on Apple Silicon — which is what Magi is built and tested for
+
 ## [0.2.0-alpha.2] - 2026-08-07
 
 Magi now checks what a model can do before relying on it.
@@ -82,7 +96,8 @@ First build. The shell exists; there is nothing intelligent behind it yet.
 - Requires Accessibility permission for the global shortcut
 - Not signed or notarized — there is no downloadable build
 
-[Unreleased]: https://github.com/yanotoma/magi/compare/v0.2.0-alpha.2...HEAD
+[Unreleased]: https://github.com/yanotoma/magi/compare/v0.3.0-alpha.1...HEAD
+[0.3.0-alpha.1]: https://github.com/yanotoma/magi/compare/v0.2.0-alpha.2...v0.3.0-alpha.1
 [0.2.0-alpha.2]: https://github.com/yanotoma/magi/compare/v0.2.0-alpha.1...v0.2.0-alpha.2
 [0.2.0-alpha.1]: https://github.com/yanotoma/magi/compare/v0.1.0-alpha.1...v0.2.0-alpha.1
 [0.1.0-alpha.1]: https://github.com/yanotoma/magi/releases/tag/v0.1.0-alpha.1
