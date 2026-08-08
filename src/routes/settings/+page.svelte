@@ -59,6 +59,19 @@
   let progress = $state<DownloadProgress | null>(null);
   let voiceError = $state<string | null>(null);
 
+  /** Which model this window is downloading, tracked locally.
+   *
+   *  Not read from `voice.downloading`, and that was a real bug rather than a
+   *  preference: `downloadSpeechModel` awaits the entire transfer before returning a
+   *  fresh view, so `voice` stays the object from before the click for the whole
+   *  download — with `downloading` still null. The bar was gated on backend state the
+   *  frontend could not see until it no longer mattered, and appeared for an instant at
+   *  the end.
+   *
+   *  The side that started the download already knows it started. The same mistake as
+   *  gating the panel's cancelled state on an event from a task that had been aborted. */
+  let downloadingHere = $state<SpeechModel | null>(null);
+
   /** Which model is being probed, or null.
    *
    *  Two fields rather than a joined `"provider model"` key. Both halves are
@@ -231,6 +244,23 @@
       voice = await action();
     } catch (e) {
       voiceError = String(e);
+    }
+  };
+
+  /** Starts a download and shows it immediately. */
+  const download = async (model: SpeechModel) => {
+    downloadingHere = model;
+    progress = null;
+    voiceError = null;
+    try {
+      voice = await downloadSpeechModel(model);
+    } catch (e) {
+      voiceError = String(e);
+    } finally {
+      // Cleared whatever happened, so a failure cannot leave the row stuck showing a
+      // download that is no longer running.
+      downloadingHere = null;
+      progress = null;
     }
   };
 
@@ -677,9 +707,9 @@
                 </button>
 
                 <div class="actions">
-                  {#if voice.downloading === model.id}
+                  {#if downloadingHere === model.id}
                     <span class="hint">
-                      {progress ? `${percent(progress)}%` : "Starting…"}
+                      {progress ? `${percent(progress)}%` : "Connecting…"}
                     </span>
                   {:else if model.downloaded}
                     <span class="badge granted">On disk</span>
@@ -695,8 +725,8 @@
                   {:else}
                     <button
                       type="button"
-                      disabled={voice.downloading !== null}
-                      onclick={() => runVoice(() => downloadSpeechModel(model.id))}
+                      disabled={downloadingHere !== null}
+                      onclick={() => download(model.id)}
                     >
                       Download {megabytes(model.approximate_mb * 1_000_000)}
                     </button>
@@ -704,16 +734,34 @@
                 </div>
               </div>
 
-              {#if voice.downloading === model.id && progress}
-                <!-- A real bar, not a spinner. 465 MB deserves to be told how far along
-                     it is, and the byte counts are what make a stalled download
-                     visible. -->
-                <div class="bar" role="progressbar" aria-valuenow={percent(progress)}>
-                  <div class="bar-fill" style="width: {percent(progress)}%"></div>
+              {#if downloadingHere === model.id}
+                <!--
+                  A real bar, not a spinner. 488 MB deserves to be told how far along it
+                  is, and the byte counts are what make a stalled download visible where a
+                  spinner would look identical either way.
+
+                  Shown from the click, not from the first byte: the gap while the request
+                  is opening is exactly when someone wonders whether their click worked.
+                  An indeterminate stripe covers it.
+                -->
+                <div
+                  class="bar"
+                  class:indeterminate={!progress}
+                  role="progressbar"
+                  aria-valuenow={progress ? percent(progress) : undefined}
+                >
+                  <div
+                    class="bar-fill"
+                    style={progress ? `width: ${percent(progress)}%` : ""}
+                  ></div>
                 </div>
                 <p class="hint">
-                  {megabytes(progress.downloaded)} of {megabytes(progress.total)} — leaving
-                  this screen will not stop it
+                  {#if progress}
+                    {megabytes(progress.downloaded)} of {megabytes(progress.total)} —
+                    leaving this screen will not stop it
+                  {:else}
+                    Opening the connection…
+                  {/if}
                 </p>
               {/if}
             </li>
@@ -1711,6 +1759,30 @@
     height: 5px;
     margin-top: var(--gap-sm);
     overflow: hidden;
+  }
+
+  /* Before the first byte, the bar has nothing to measure. A sliding stripe says
+     "working" without claiming a position it does not know. */
+  .bar.indeterminate .bar-fill {
+    animation: sliding 1.1s ease-in-out infinite;
+    width: 40%;
+  }
+
+  @keyframes sliding {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(250%);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .bar.indeterminate .bar-fill {
+      animation: none;
+      width: 100%;
+      opacity: 0.4;
+    }
   }
 
   .bar-fill {

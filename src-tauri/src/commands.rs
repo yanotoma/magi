@@ -1068,11 +1068,21 @@ pub async fn download_speech_model(
     let emitter = app.clone();
 
     let result = tauri::async_runtime::spawn_blocking(move || {
+        // Emitted only when the whole-number percentage changes. The read loop hands over
+        // a progress value every 256 kB, which for a 488 MB model is nearly two thousand
+        // events — and a bar cannot show more than a hundred distinct states, so the rest
+        // is IPC traffic and reactive updates with no visible effect.
+        let mut last_percent = u8::MAX;
+
         model::download(&http, model, &dir, |progress: Progress| {
-            // A dropped listener is not a reason to stop: the user may simply have
-            // closed Settings, and abandoning a 465 MB download because nobody is
-            // watching the bar would be its own bug.
-            let _ = emitter.emit("magi://model-download", progress);
+            let percent = progress.percent();
+            if percent != last_percent {
+                last_percent = percent;
+                // A dropped listener is not a reason to stop: the user may simply have
+                // closed Settings, and abandoning a 488 MB download because nobody is
+                // watching the bar would be its own bug.
+                let _ = emitter.emit("magi://model-download", progress);
+            }
             true
         })
     })
