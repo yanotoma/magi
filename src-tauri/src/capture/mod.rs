@@ -10,5 +10,7 @@
 //! screen to run on.
 
 pub mod deixis;
+pub mod downscale;
 
 pub use deixis::{asks_about_the_screen, Deixis};
+pub use downscale::{target_size, visual_tokens};
