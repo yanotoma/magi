@@ -18,10 +18,14 @@
     removeSpeechModel,
     openPermissionSettings,
     onDownloadProgress,
+    getCapture,
+    clearCaptureLog,
     type ModelCapability,
     type VoiceView,
     type SpeechModel,
     type DownloadProgress,
+    type CaptureView,
+    type CaptureSubject,
     MAX_PROMPT_CONTEXT,
     PRESETS,
     type ConfigView,
@@ -32,12 +36,13 @@
   import { acceleratorFrom, describeShortcut } from "$lib/shortcut";
   import Icon from "$lib/Icon.svelte";
 
-  type Pane = "general" | "models" | "voice" | "hotkeys";
+  type Pane = "general" | "models" | "voice" | "screen" | "hotkeys";
 
   const PANES: ReadonlyArray<{ id: Pane; label: string }> = [
     { id: "general", label: "General" },
     { id: "models", label: "Models" },
     { id: "voice", label: "Voice" },
+    { id: "screen", label: "Screen" },
     { id: "hotkeys", label: "Hotkeys" },
   ];
 
@@ -58,6 +63,9 @@
   let voice = $state<VoiceView | null>(null);
   let progress = $state<DownloadProgress | null>(null);
   let voiceError = $state<string | null>(null);
+
+  let capture = $state<CaptureView | null>(null);
+  let captureError = $state<string | null>(null);
 
   /** Which model this window is downloading, tracked locally.
    *
@@ -245,6 +253,50 @@
     } catch (e) {
       voiceError = String(e);
     }
+  };
+
+  const loadCapture = async () => {
+    try {
+      capture = await getCapture();
+    } catch (e) {
+      captureError = String(e);
+    }
+  };
+
+  // Read once on mount, and again whenever the pane is opened: the screen-recording
+  // permission can change in System Settings while this window sits in the background.
+  $effect(() => {
+    if (pane === "screen") loadCapture();
+  });
+
+  const runCapture = async (action: () => Promise<CaptureView>) => {
+    captureError = null;
+    try {
+      capture = await action();
+    } catch (e) {
+      captureError = String(e);
+    }
+  };
+
+  /**
+   * Display name for a captured subject.
+   *
+   * For a display: the label from the system. For a window: app and title separated
+   * by an em dash, falling back to app alone when macOS withholds the title
+   * (which happens when screen-recording permission is absent).
+   */
+  const subjectLabel = (subject: CaptureSubject): string => {
+    if (subject.kind === "display") return subject.label;
+    return subject.title ? `${subject.app} — ${subject.title}` : subject.app;
+  };
+
+  /** Human-readable relative time from a millisecond epoch timestamp. */
+  const relativeTime = (ms: number): string => {
+    const delta = Date.now() - ms;
+    if (delta < 60_000) return "just now";
+    if (delta < 3_600_000) return `${Math.floor(delta / 60_000)} min ago`;
+    if (delta < 86_400_000) return `${Math.floor(delta / 3_600_000)} hr ago`;
+    return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   };
 
   /** Starts a download and shows it immediately. */
@@ -819,6 +871,74 @@
         {/if}
       {:else if voiceError}
         <p class="error" role="alert">{voiceError}</p>
+      {/if}
+    {/if}
+
+    {#if pane === "screen"}
+      <h2>Screen recording</h2>
+      {#if capture}
+        <!--
+          A status row rather than a message that appears only when something fails.
+          Screen-recording permission fails silently on macOS, so the only way a user
+          learns the state is by being shown it.
+        -->
+        <div class="perm-row">
+          <span class="badge {capture.screen_recording}">{capture.screen_recording.replace(/-/g, " ")}</span>
+          <span class="hint">{capture.screen_recording_explanation}</span>
+        </div>
+
+        <!--
+          `denied` is the only state worth a button, and unlike the microphone it is also
+          the only negative state that exists here: the backend reads this permission from
+          `CGPreflightScreenCaptureAccess`, which returns a bare bool, so "never asked" and
+          "explicitly refused" are indistinguishable and both arrive as `denied`. There is
+          no `restricted` or `not-asked` case to handle — see `permissions::screen_recording`.
+        -->
+        {#if capture.screen_recording === "denied"}
+          <button type="button" onclick={() => openPermissionSettings("screen-recording")}>
+            Open Privacy &amp; Security
+          </button>
+        {/if}
+
+        <h2 class="spaced">Captures this session</h2>
+        <p class="hint">Kept in memory only — not written to disk.</p>
+
+        {#if capture.entries.length === 0}
+          <p class="empty">Magi has not read your screen.</p>
+        {:else}
+          <ul class="capture-log">
+            <!--
+              Unkeyed on purpose. `at` is a millisecond timestamp, and two captures in the
+              same millisecond would be a duplicate key — which Svelte treats as an error
+              and which would take the whole pane down rather than render a row twice. The
+              list is re-fetched whole and never mutated in place, so there is no identity
+              for a key to preserve.
+            -->
+            {#each capture.entries as entry}
+              <li class="capture-entry">
+                <span class="capture-subject">{subjectLabel(entry.subject)}</span>
+                <p class="hint">{entry.reason.text}</p>
+                <p class="hint capture-meta">
+                  <span>{relativeTime(entry.at)}</span>
+                  <span>{entry.width}×{entry.height} · {entry.visual_tokens} tokens</span>
+                </p>
+              </li>
+            {/each}
+          </ul>
+          <button
+            type="button"
+            class="link"
+            onclick={() => runCapture(clearCaptureLog)}
+          >
+            Clear
+          </button>
+        {/if}
+
+        {#if captureError}
+          <p class="error" role="alert">{captureError}</p>
+        {/if}
+      {:else if captureError}
+        <p class="error" role="alert">{captureError}</p>
       {/if}
     {/if}
 
@@ -1960,5 +2080,54 @@
     font-size: 11px;
     opacity: var(--muted-strong);
     overflow-wrap: anywhere;
+  }
+
+  /* `not-applicable` is a valid permission state on systems that do not gate this
+     permission at all — neither good nor bad, just inapplicable. Neutral tone
+     matches `not-asked`. */
+  .badge.not-applicable {
+    background: var(--tone-neutral);
+  }
+
+  /* Capped and scrolling: captures can accumulate across a long session, and a
+     list that grows the window would push the Clear button out of view. Same
+     pattern as .model-list. */
+  .capture-log {
+    border: 1px solid var(--line);
+    border-radius: var(--radius-control);
+    list-style: none;
+    margin: var(--gap-sm) 0 0;
+    max-height: 15em;
+    overflow-y: auto;
+    padding: 0;
+  }
+
+  .capture-entry {
+    border-top: 1px solid var(--line);
+    padding: var(--gap-sm) var(--gap-md);
+  }
+
+  .capture-entry:first-child {
+    border-top: none;
+  }
+
+  .capture-entry:hover {
+    background: var(--surface-hover);
+  }
+
+  .capture-subject {
+    display: block;
+    font-size: 12px;
+    font-weight: 500;
+    overflow-wrap: anywhere;
+  }
+
+  /* Two metadata fragments left- and right-aligned: time reads left-to-right,
+     and the cost figures sit at the far end where they do not compete with the
+     reason text. */
+  .capture-meta {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 3px;
   }
 </style>

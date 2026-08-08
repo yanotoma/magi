@@ -12,9 +12,11 @@
 pub mod deixis;
 pub mod downscale;
 pub mod encode;
+pub mod log;
 pub mod source;
 
 pub use deixis::{asks_about_the_screen, Deixis};
 pub use downscale::{target_size, visual_tokens};
 pub use encode::CaptureError;
+pub use log::{CaptureLog, Entry};
 pub use source::{Capture, DisplayInfo, FakeCapture, ScreenCapture, Subject, WindowInfo};

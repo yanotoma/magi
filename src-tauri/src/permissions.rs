@@ -89,8 +89,10 @@ pub enum PermissionKind {
     /// Needed for the global hotkey. Has no usage-description key and no API to query,
     /// so it is inferred from whether registration succeeded.
     Accessibility,
-    /// M5. Has no usage-description key either — macOS supplies its own string, which
-    /// is exactly why the in-app explanation matters.
+    /// Has no usage-description key either — macOS supplies its own string, which is
+    /// exactly why the in-app explanation matters. Unlike Accessibility it *can* be
+    /// queried, via `CGPreflightScreenCaptureAccess`, but only as a bool: see
+    /// [`screen_recording`] for why that leaves just two reachable states.
     ScreenRecording,
 }
 

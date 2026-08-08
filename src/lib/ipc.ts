@@ -288,6 +288,54 @@ export const openPermissionSettings = async (kind: "microphone" | "accessibility
   invoke("open_permission_settings", { kind });
 
 /**
+ * The captured subject — either a full display or a specific application window.
+ *
+ * macOS withholds other apps' window titles when screen-recording permission is
+ * absent, so `title` can be empty even when the window exists.
+ */
+export type CaptureSubject =
+  | { kind: "display"; id: number; label: string }
+  | { kind: "window"; id: number; title: string; app: string };
+
+/** Why a capture happened, and who or what triggered it. */
+export type CaptureReason = {
+  /** The full rendered sentence — render verbatim, do not rebuild it. */
+  text: string;
+  asked_by: "model" | "you";
+};
+
+/** One screen-capture event, as the backend recorded it. */
+export type CaptureEntry = {
+  /** Milliseconds since the Unix epoch. */
+  at: number;
+  subject: CaptureSubject;
+  reason: CaptureReason;
+  width: number;
+  height: number;
+  visual_tokens: number;
+};
+
+export type CaptureView = {
+  screen_recording: Permission;
+  screen_recording_explanation: string;
+  screen_recording_settings_url: string;
+  /** Most recent first, ordered by the backend. */
+  entries: CaptureEntry[];
+};
+
+export const getCapture = async (): Promise<CaptureView> =>
+  invoke<CaptureView>("get_capture");
+
+/**
+ * Clears the in-memory capture log and returns the updated view.
+ *
+ * The log is never written to disk — this clears only what has accumulated
+ * since launch.
+ */
+export const clearCaptureLog = async (): Promise<CaptureView> =>
+  invoke<CaptureView>("clear_capture_log");
+
+/**
  * Subscribes to model-download progress.
  *
  * Bundled with the completion event so a caller cannot unsubscribe from one and leak

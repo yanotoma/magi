@@ -113,6 +113,7 @@ pub fn run() {
                 secrets: std::sync::Arc::new(KeyringStore),
                 key_hints: Mutex::new(std::collections::HashMap::new()),
                 capabilities: Mutex::new(capabilities),
+                capture_log: std::sync::Arc::new(crate::capture::CaptureLog::new()),
                 in_flight: Mutex::new(None),
             });
 
@@ -155,6 +156,8 @@ pub fn run() {
             commands::set_voice_languages,
             commands::download_speech_model,
             commands::remove_speech_model,
+            commands::get_capture,
+            commands::clear_capture_log,
             commands::open_permission_settings,
             commands::send_text_turn,
             commands::cancel_turn,

@@ -85,6 +85,13 @@ pub struct AppState {
     /// in an editor and paste into bug reports.
     pub models_dir: PathBuf,
 
+    /// Every screenshot this run has taken, and why.
+    ///
+    /// `Arc` because the capture path records from a `spawn_blocking` worker while Settings
+    /// reads from a command, and neither should wait on the other for longer than a push
+    /// onto a queue. Deliberately not persisted — see `capture::log`.
+    pub capture_log: Arc<crate::capture::CaptureLog>,
+
     /// Set while a model download is running.
     ///
     /// Guards against a second download of the same file: two writers appending to one
@@ -215,6 +222,25 @@ pub struct VoiceView {
     pub microphone_settings_url: String,
     /// The model currently downloading, if any.
     pub downloading: Option<Model>,
+}
+
+/// Everything Settings shows about screen reading.
+///
+/// Same shape as the microphone rows in [`VoiceView`]: the state, what it means, and where
+/// to go about it. The permission and the log belong in one view because they answer two
+/// halves of the same question — *can* Magi read my screen, and *has* it.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CaptureView {
+    pub screen_recording: Permission,
+
+    /// What to tell the user, and what they can do about it.
+    pub screen_recording_explanation: String,
+
+    /// The System Settings deep link for the Screen Recording pane.
+    pub screen_recording_settings_url: String,
+
+    /// Every capture this run of Magi has made, most recent first.
+    pub entries: Vec<crate::capture::Entry>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1120,6 +1146,37 @@ pub fn remove_speech_model(state: State<'_, AppState>, model: Model) -> CommandR
     let _ = std::fs::remove_file(model.partial_path_in(&state.models_dir));
 
     get_voice(state)
+}
+
+/// What Magi can read, and what it has read.
+///
+/// Synchronous and cheap: the permission query is a CoreGraphics call with no round trip and
+/// the log is a clone of an in-memory queue. Nothing here touches the keychain, which is the
+/// thing that must never run on the main thread.
+#[tauri::command]
+pub fn get_capture(state: tauri::State<'_, AppState>) -> CommandResult<CaptureView> {
+    let screen_recording = permissions::screen_recording();
+
+    Ok(CaptureView {
+        screen_recording,
+        // "Screen reading" rather than "Screen Recording": the permission is called the
+        // latter by macOS, but Magi takes still screenshots on request and describing that
+        // as recording invites the reading that it is always watching.
+        screen_recording_explanation: screen_recording.explanation("Screen reading"),
+        screen_recording_settings_url: permissions::settings_url(PermissionKind::ScreenRecording)
+            .to_string(),
+        entries: state.capture_log.entries(),
+    })
+}
+
+/// Forgets every recorded capture.
+///
+/// Offered because someone who has just shown Magi something private should be able to
+/// remove the record of it without quitting the app.
+#[tauri::command]
+pub fn clear_capture_log(state: tauri::State<'_, AppState>) -> CommandResult<CaptureView> {
+    state.capture_log.clear();
+    get_capture(state)
 }
 
 /// Opens the System Settings pane for a permission.
