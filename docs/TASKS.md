@@ -297,7 +297,7 @@ Project-local skills exist so future sessions don't re-derive version-specific t
 | `llm-providers` | ✅ | Provider protocol families, vision/tool/stream formats, pre-flight probes |
 | `macos-permissions` | ✅ | TCC, Info.plist, signing, notarization, sidecar signing |
 | `audio-stt` | ✅ | cpal 0.18 behavioural breaks, the 16 kHz contract, the realtime callback, whisper-rs build and Metal, and the model download whose obvious checksum is the wrong value |
-| `screen-capture` | M5 | xcap, multi-display, downscaling for vision cost |
+| `screen-capture` | ✅ | The capture API obsoleted in macOS 15, the permission that degrades silently instead of failing, logical points vs pixels, and the vision-token budget that is not a pixel budget |
 | `release` | M7 | Tag → universal build → sign → notarize → staple → GitHub release → updater |
 | `wake-word` | M8 | openWakeWord ONNX via `ort`, false-positive tuning |
 | `tts` | M8 | Piper sidecar, sentence chunking, barge-in |
