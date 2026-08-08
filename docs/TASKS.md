@@ -328,6 +328,36 @@ Recorded so they are not re-proposed.
 
 ---
 
+## Deferred: code-switching within one recording
+
+Also outside the summary table, for the reason given below.
+
+**Open question, not a known defect.** Whisper decides the language once, on the first
+window, and that decision governs the whole recording — `whisper_full` runs its detect
+before the main loop, and `detect_among` likewise inspects offset 0 only. So a shortlist
+answers "which of my languages is this recording in", not "which language is this
+sentence in". Someone speaking Spanish and English in the same breath gets one governing
+language either way.
+
+What is unknown is how much that costs in practice, and there is reason to think the
+answer is "little": the language token conditions the decoder rather than binding it —
+a multilingual model pinned to `en` and handed clear Spanish transcribed it as Spanish
+anyway when this was tested — and `set_translate(false)` means nothing is rendered into
+the governing language on purpose. Mixed speech may well survive intact.
+
+Do not act on that reasoning without measuring it. Four cases worth running against
+`ggml-base.bin`: Spanish-dominant with English phrases, English-dominant with Spanish
+phrases, and a hard switch mid-recording in both orders — the last two built by
+concatenating clips from two voices, so each half has native pronunciation rather than
+one voice's phonetics applied to the other language. The pair of hard switches is the
+informative one: it separates "whichever language starts wins" from "overall content
+wins", and only the first of those would mean a user has to think about word order.
+
+- [ ] Measure code-switched transcription across those four cases and record the result
+      here. If mixed speech degrades, the fix is not a better shortlist — per-segment
+      detection means re-running detection per window and accepting that a segment
+      boundary can land mid-sentence
+
 ## Deferred: native audio input
 
 Outside the summary table on purpose: `tools/task_counts.py` only counts sections whose
