@@ -197,10 +197,22 @@ export type SpeechModelView = {
   approximate_mb: number;
   downloaded: boolean;
   selected: boolean;
+  /** Whether it understands languages other than English. */
+  multilingual: boolean;
 };
 
 export type VoiceView = {
   models: SpeechModelView[];
+  /** The configured language, or `"auto"` to detect it. */
+  language: string;
+  /**
+   * Set when the chosen model cannot honour the chosen language.
+   *
+   * An English-only model given anything else does not fail — it writes English words
+   * that sound similar — so the combination has to be visible rather than left to
+   * produce a confident wrong transcript.
+   */
+  language_ignored: boolean;
   /** Whether the selected model is on disk and usable. */
   ready: boolean;
   microphone: Permission;
@@ -232,6 +244,37 @@ export const setSpeechModel = async (model: SpeechModel): Promise<VoiceView> =>
  */
 export const downloadSpeechModel = async (model: SpeechModel): Promise<VoiceView> =>
   invoke<VoiceView>("download_speech_model", { model });
+
+/**
+ * Sets the spoken language, or `"auto"` to detect it.
+ *
+ * Detection is the default and usually right. Choosing explicitly skips the detection
+ * pass and removes the chance of a short utterance being detected as the wrong language.
+ */
+export const setVoiceLanguage = async (language: string): Promise<VoiceView> =>
+  invoke<VoiceView>("set_voice_language", { language });
+
+/**
+ * The languages offered in Settings.
+ *
+ * A shortlist, not all ninety-nine whisper.cpp supports: a dropdown of ninety-nine is
+ * worse than one of twelve plus a config file for the rest. Hand-editing `[voice] language`
+ * accepts any code.
+ */
+export const LANGUAGES: ReadonlyArray<{ code: string; label: string }> = [
+  { code: "auto", label: "Detect automatically" },
+  { code: "en", label: "English" },
+  { code: "es", label: "Español" },
+  { code: "pt", label: "Português" },
+  { code: "fr", label: "Français" },
+  { code: "de", label: "Deutsch" },
+  { code: "it", label: "Italiano" },
+  { code: "nl", label: "Nederlands" },
+  { code: "ja", label: "日本語" },
+  { code: "zh", label: "中文" },
+  { code: "ko", label: "한국어" },
+  { code: "ru", label: "Русский" },
+];
 
 export const removeSpeechModel = async (model: SpeechModel): Promise<VoiceView> =>
   invoke<VoiceView>("remove_speech_model", { model });

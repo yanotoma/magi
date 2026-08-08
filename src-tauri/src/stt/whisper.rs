@@ -40,6 +40,20 @@ fn thread_count() -> i32 {
 }
 
 pub struct WhisperTranscriber {
+    /// The language to transcribe, or `None` to detect it.
+    ///
+    /// Held rather than passed per call because it is a setting, and threading it through
+    /// `Transcriber::transcribe` would put a whisper-specific concept in a trait that has
+    /// no other opinion about languages.
+    language: Option<String>,
+
+    /// Whether the model can transcribe anything other than English.
+    ///
+    /// Kept so `params` can force English for an `.en` model regardless of the setting.
+    /// Asking one of those for Spanish does not fail — it writes English words that sound
+    /// similar, which is worse than failing.
+    multilingual: bool,
+
     /// `None` until a model has been loaded.
     ///
     /// Loading is deferred rather than done in `new` so that a missing model is a
@@ -51,10 +65,15 @@ pub struct WhisperTranscriber {
 
 impl WhisperTranscriber {
     /// Creates a transcriber for a model that may or may not exist yet.
-    pub fn new(model_path: impl Into<PathBuf>) -> Self {
+    ///
+    /// `language` is `None` to detect, or an ISO 639-1 code. It is ignored when the model
+    /// is English-only.
+    pub fn new(model: crate::stt::Model, dir: &Path, language: Option<String>) -> Self {
         Self {
             context: Mutex::new(None),
-            model_path: model_path.into(),
+            model_path: model.path_in(dir),
+            language,
+            multilingual: model.is_multilingual(),
         }
     }
 
@@ -109,7 +128,10 @@ impl WhisperTranscriber {
 }
 
 /// The parameters every transcription uses.
-fn params<'a>() -> FullParams<'a, 'a> {
+///
+/// `language` borrows from the caller for the lifetime of the parameters, which is why
+/// this takes a reference rather than owning one: `set_language` stores the pointer.
+fn params<'a>(language: Option<&'a str>) -> FullParams<'a, 'a> {
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
 
     // whisper.cpp writes to stdout unless every one of these is off. In a background
@@ -122,10 +144,13 @@ fn params<'a>() -> FullParams<'a, 'a> {
 
     params.set_n_threads(thread_count());
 
-    // English, and stated rather than detected. The default models are `.en`
-    // variants, which cannot detect a language they were not trained on, and asking
-    // them to try costs a pass over the audio to reach the same answer.
-    params.set_language(Some("en"));
+    // `None` means detect. Whisper needs `detect_language` set as well, or a `None`
+    // language falls back to English rather than being inferred.
+    params.set_language(language);
+    params.set_detect_language(language.is_none());
+
+    // Transcribe, never translate. Someone speaking Spanish wants Spanish text: silently
+    // rendering it in English would be a different feature, and one they did not ask for.
     params.set_translate(false);
 
     // Suppresses the blank and non-speech tokens whisper.cpp emits over silence,
@@ -160,8 +185,17 @@ impl Transcriber for WhisperTranscriber {
             .create_state()
             .map_err(|e| SttError::Failed(format!("the model would not start: {e}")))?;
 
+        // An English-only model is forced to English whatever the setting says. Asking one
+        // for Spanish does not fail — it writes English words that sound similar, which is
+        // worse than failing, so the setting is overridden rather than honoured.
+        let language: Option<&str> = if self.multilingual {
+            self.language.as_deref()
+        } else {
+            Some("en")
+        };
+
         state
-            .full(params(), samples)
+            .full(params(language), samples)
             .map_err(|e| SttError::Failed(e.to_string()))?;
 
         // `as_iter` and `to_str_lossy`, not the `full_get_segment_text(i)` that most
@@ -230,7 +264,8 @@ mod tests {
     fn a_missing_model_reports_itself_rather_than_failing_to_construct() {
         // The first-run state. If `new` failed, the app could not start to offer the
         // download.
-        let transcriber = WhisperTranscriber::new("/nonexistent/ggml-base.en.bin");
+        let transcriber =
+            WhisperTranscriber::new(crate::stt::Model::Base, Path::new("/nonexistent"), None);
         assert!(!transcriber.is_ready());
         assert!(matches!(transcriber.load(), Err(SttError::ModelMissing)));
     }
@@ -239,7 +274,8 @@ mod tests {
     fn audio_too_short_is_rejected_before_the_model_is_touched() {
         // The order matters: a tapped hotkey must not cost a model load. This passes
         // with no model on disk precisely because the length check comes first.
-        let transcriber = WhisperTranscriber::new("/nonexistent/ggml-base.en.bin");
+        let transcriber =
+            WhisperTranscriber::new(crate::stt::Model::Base, Path::new("/nonexistent"), None);
         let tap = vec![0.0; 100];
         assert!(matches!(
             transcriber.transcribe(&tap),
@@ -249,7 +285,8 @@ mod tests {
 
     #[test]
     fn unloading_a_transcriber_that_never_loaded_is_harmless() {
-        let transcriber = WhisperTranscriber::new("/nonexistent/model.bin");
+        let transcriber =
+            WhisperTranscriber::new(crate::stt::Model::Base, Path::new("/nonexistent"), None);
         transcriber.unload();
         transcriber.unload();
         assert!(!transcriber.is_ready());
@@ -280,15 +317,19 @@ mod tests {
 
     #[test]
     fn it_satisfies_the_trait_object() {
-        let transcriber: Box<dyn Transcriber> =
-            Box::new(WhisperTranscriber::new("/nonexistent/model.bin"));
+        let transcriber: Box<dyn Transcriber> = Box::new(WhisperTranscriber::new(
+            crate::stt::Model::Base,
+            Path::new("/nonexistent"),
+            None,
+        ));
         assert!(!transcriber.is_ready());
     }
 
     #[test]
     fn the_model_path_is_readable_back() {
         // Settings shows it, and the downloader writes to it.
-        let transcriber = WhisperTranscriber::new("/tmp/ggml-base.en.bin");
+        let transcriber =
+            WhisperTranscriber::new(crate::stt::Model::BaseEn, Path::new("/tmp"), None);
         assert_eq!(
             transcriber.model_path().to_string_lossy(),
             "/tmp/ggml-base.en.bin"

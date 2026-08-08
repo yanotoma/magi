@@ -12,6 +12,8 @@
     runPreflight,
     getVoice,
     setSpeechModel,
+    setVoiceLanguage,
+    LANGUAGES,
     downloadSpeechModel,
     removeSpeechModel,
     openPermissionSettings,
@@ -613,6 +615,36 @@
           </button>
         {/if}
 
+        <h2 class="spaced">Language</h2>
+        <label>
+          Spoken language
+          <select
+            value={voice.language}
+            onchange={(e) => runVoice(() => setVoiceLanguage(e.currentTarget.value))}
+          >
+            {#each LANGUAGES as language (language.code)}
+              <option value={language.code}>{language.label}</option>
+            {/each}
+          </select>
+        </label>
+        <p class="hint">
+          Detection is usually right, and handles switching languages between questions.
+          Choosing one is slightly faster and removes the chance of a short phrase being
+          detected wrongly.
+        </p>
+
+        <!--
+          The trap this exists to close. An English-only model given Spanish does not
+          fail — it writes English words that sound similar — so the combination has to
+          be said out loud rather than left to produce a confident wrong transcript.
+        -->
+        {#if voice.language_ignored}
+          <p class="error" role="alert">
+            The selected model understands English only, so this language is ignored.
+            Pick a multilingual model below.
+          </p>
+        {/if}
+
         <h2 class="spaced">Speech model</h2>
         <p class="hint">
           Transcription happens on this Mac. Nothing you say is sent anywhere.
@@ -635,6 +667,11 @@
                   <span class="bullet" aria-hidden="true">{model.selected ? "●" : ""}</span>
                   <span class="ident">
                     <strong>{model.label}</strong>
+                    {#if !model.multilingual}
+                      <!-- Marked in the row as well as the label, because the label is
+                           what someone reads and the badge is what they notice. -->
+                      <span class="badge">EN</span>
+                    {/if}
                     <span class="hint">{model.description}</span>
                   </span>
                 </button>

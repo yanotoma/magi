@@ -56,6 +56,12 @@ pub enum ConfigError {
 
     #[error("[hotkey] toggle is not a usable shortcut: {reason}")]
     InvalidHotkey { reason: String },
+
+    #[error(
+        "[voice] language is '{found}', which is neither 'auto' nor a language code. \
+         Use 'auto' to detect it, or a code such as 'en', 'es' or 'pt'."
+    )]
+    InvalidLanguage { found: String },
 }
 
 /// How a provider speaks, which decides which implementation handles it.
@@ -198,8 +204,14 @@ pub struct PromptConfig {
     pub context: String,
 }
 
+/// The longest a language code can be, so a hand-edited file cannot smuggle prose in.
+const MAX_LANGUAGE_CODE: usize = 8;
+
+/// Which language to transcribe, or detect.
+pub const AUTO_LANGUAGE: &str = "auto";
+
 /// Voice input settings.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct VoiceConfig {
     /// Which speech model transcribes.
@@ -209,6 +221,31 @@ pub struct VoiceConfig {
     /// still has both files, and the choice is theirs rather than whichever happens to
     /// be present.
     pub model: crate::stt::Model,
+
+    /// The spoken language, or `"auto"` to let the model decide.
+    ///
+    /// `"auto"` by default. Detection costs a pass over the audio and is worth it: the
+    /// alternative is a setting most people never find, and the failure when it is wrong
+    /// is not an error but a fluent wrong transcript.
+    ///
+    /// An ISO 639-1 code otherwise — `es`, `en`, `pt`, `fr`. Stored as a string rather
+    /// than an enum so a language Magi has no dropdown entry for still works when
+    /// written by hand; whisper.cpp accepts about ninety-nine of them and enumerating
+    /// them here would be a list to maintain for no gain.
+    ///
+    /// **Ignored entirely by an English-only model.** Those cannot transcribe anything
+    /// else, so honouring the setting would be a promise the model cannot keep — the UI
+    /// says so rather than letting it look effective.
+    pub language: String,
+}
+
+impl Default for VoiceConfig {
+    fn default() -> Self {
+        Self {
+            model: crate::stt::Model::default(),
+            language: AUTO_LANGUAGE.to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -292,6 +329,19 @@ impl Config {
             return Err(ConfigError::PromptContextTooLong {
                 found: context_length,
                 limit: MAX_PROMPT_CONTEXT,
+            });
+        }
+
+        // A language code, or "auto". Checked so a typo is a reported mistake rather than
+        // a setting that silently does nothing.
+        let language = self.voice.language.trim();
+        let plausible = language == AUTO_LANGUAGE
+            || (!language.is_empty()
+                && language.len() <= MAX_LANGUAGE_CODE
+                && language.chars().all(|c| c.is_ascii_lowercase() || c == '-'));
+        if !plausible {
+            return Err(ConfigError::InvalidLanguage {
+                found: language.chars().take(32).collect(),
             });
         }
 
@@ -400,6 +450,47 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_language_defaults_to_automatic_detection() {
+        // The alternative is a setting most people never find, and the failure when it is
+        // wrong is not an error but a fluent wrong transcript.
+        let config = Config::from_toml("").expect("an empty file is valid");
+        assert_eq!(config.voice.language, AUTO_LANGUAGE);
+    }
+
+    #[test]
+    fn a_language_code_is_accepted() {
+        for code in ["es", "en", "pt", "fr", "zh", "pt-br"] {
+            let source = format!("[voice]\nlanguage = \"{code}\"");
+            let config = Config::from_toml(&source).unwrap_or_else(|e| panic!("{code}: {e}"));
+            assert_eq!(config.voice.language, code);
+        }
+    }
+
+    #[test]
+    fn prose_in_the_language_field_is_refused() {
+        // A typo here would otherwise be a setting that silently does nothing.
+        for bad in ["Spanish", "ES", "es_MX", "the language I speak", ""] {
+            let source = format!("[voice]\nlanguage = \"{bad}\"");
+            assert!(
+                Config::from_toml(&source).is_err(),
+                "{bad:?} should have been refused"
+            );
+        }
+    }
+
+    #[test]
+    fn the_default_model_understands_more_than_english() {
+        // The first version defaulted to an English-only model, which for a project aimed
+        // at a global contributor base was the wrong choice — and it fails silently,
+        // writing English words that sound like whatever was said.
+        let config = Config::from_toml("").expect("valid");
+        assert!(
+            config.voice.model.is_multilingual(),
+            "the default model must not be English-only"
+        );
+    }
+
+    #[test]
     fn push_to_talk_has_its_own_default() {
         let config = Config::from_toml("").expect("an empty file is valid");
         assert_eq!(
@@ -483,10 +574,13 @@ mod tests {
     }
 
     #[test]
-    fn the_voice_model_defaults_to_the_smallest_download() {
-        // First run. 1.4 GB is not a first-run experience.
+    fn the_voice_model_defaults_to_the_smallest_multilingual_one() {
+        // Small enough to wait for on first run, and able to understand whoever is
+        // speaking — the earlier default was English-only, which fails by writing English
+        // words that sound like whatever it heard.
         let config = Config::from_toml("").expect("an empty file is valid");
-        assert_eq!(config.voice.model, crate::stt::Model::BaseEn);
+        assert_eq!(config.voice.model, crate::stt::Model::Base);
+        assert!(config.voice.model.is_multilingual());
     }
 
     #[test]
@@ -494,15 +588,15 @@ mod tests {
         let config = Config::from_toml(
             r#"
             [voice]
-            model = "small-en"
+            model = "small"
             "#,
         )
         .expect("valid");
-        assert_eq!(config.voice.model, crate::stt::Model::SmallEn);
+        assert_eq!(config.voice.model, crate::stt::Model::Small);
 
         // And survives a write, which is what `set_speech_model` depends on.
         let written = toml::to_string_pretty(&config).expect("serialisable");
-        assert!(written.contains("small-en"), "got:\n{written}");
+        assert!(written.contains("small"), "got:\n{written}");
     }
 
     #[test]

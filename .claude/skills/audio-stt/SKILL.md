@@ -76,6 +76,21 @@ Timestamps are **centiseconds**, not milliseconds. Divide by 100.
 
 Prefer `to_str_lossy` over `to_str` when the text goes to the UI: the strict version fails on invalid UTF-8, and losing a whole sentence to one bad byte is the wrong trade against a replacement character.
 
+### The `.en` models cannot tell you they do not understand you
+
+`ggml-base.en.bin` and the other `.en` variants are trained on English only. Given Spanish they do not fail, report low confidence, or return nothing — **they write the English words that sound closest**. The result is a fluent, confident, entirely wrong transcript, and nothing anywhere says why.
+
+Magi shipped `.en` models as the default for exactly one commit, on the reasoning that they are better per byte at English. That is true and it was the wrong default for a project aimed at a global contributor base. The multilingual variants are the same names without `.en`, cost 10–15 MB more, and cover about ninety-nine languages.
+
+Two rules follow:
+
+- **Default to multilingual.** An English-only model is an option someone chooses knowing the trade, never the one they get by accident.
+- **Never let a language setting appear to apply to an `.en` model.** Force English at the parameters and say so in the UI. Honouring the setting would be a promise the model cannot keep.
+
+`params.set_language(None)` alone does **not** mean detect — it falls back to English. `set_detect_language(true)` has to be set with it.
+
+And `set_translate(false)`, always. Someone speaking Spanish wants Spanish text; translating silently is a different feature they did not ask for.
+
 ### Use `no_speech_probability`, not a list of hallucinations
 
 `segment.no_speech_probability()` is whisper.cpp's own per-segment judgement that a passage is not speech. It is a far better silence filter than matching output against known hallucinations — numeric, from the model, and language-independent, where a string list is English-only and needs maintaining as the model changes.

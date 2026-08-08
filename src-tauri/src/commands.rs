@@ -66,7 +66,17 @@ pub struct AppState {
 
     /// The speech model. Loads on first use, so holding one here costs nothing until
     /// somebody speaks.
-    pub transcriber: Box<dyn crate::stt::Transcriber>,
+    ///
+    /// Swappable, because the model and the language are settings. Built once at startup,
+    /// changing either in Settings would save the config, show the new value, and keep
+    /// transcribing with the old model until a restart — which is the kind of silent
+    /// wrongness this project spends its effort avoiding.
+    ///
+    /// An `Arc` inside the `Mutex` so a caller clones the pointer and releases the lock
+    /// before running inference. Holding it across a transcription would freeze Settings
+    /// for seconds, and a transcription already under way finishes with the model it
+    /// started on rather than being cut off.
+    pub transcriber: Mutex<Arc<dyn crate::stt::Transcriber>>,
 
     /// Where speech models live: the app data directory plus `models/`.
     ///
@@ -177,12 +187,25 @@ pub struct SpeechModelView {
     /// Whether the file is already on disk.
     pub downloaded: bool,
     pub selected: bool,
+    /// Whether it understands languages other than English. The single most consequential
+    /// fact about a model here, because getting it wrong is silent.
+    pub multilingual: bool,
 }
 
 /// Everything the Voice pane needs in one shape.
 #[derive(Debug, Serialize)]
 pub struct VoiceView {
     pub models: Vec<SpeechModelView>,
+
+    /// The configured language, or `"auto"`.
+    pub language: String,
+
+    /// Set when the chosen model cannot honour the chosen language.
+    ///
+    /// An English-only model given anything else does not fail — it writes English words
+    /// that sound similar. So the combination is reported rather than left to produce a
+    /// confident wrong transcript.
+    pub language_ignored: bool,
     /// Whether the selected model is ready to transcribe with.
     pub ready: bool,
     pub microphone: Permission,
@@ -899,6 +922,28 @@ fn describe(reason: &StopReason) -> Option<String> {
     }
 }
 
+/// Rebuilds the transcriber from the current config.
+///
+/// Called after anything that changes which model or language is in use. In one place so
+/// the two setters cannot drift, and so the reason lives once: the old transcriber holds a
+/// loaded model, and dropping it is what frees those hundreds of megabytes.
+fn rebuild_transcriber(state: &State<'_, AppState>) -> CommandResult<()> {
+    let (model, language) = {
+        let config = state.config.lock().map_err(to_message)?;
+        let language = (config.voice.language != crate::config::AUTO_LANGUAGE)
+            .then(|| config.voice.language.clone());
+        (config.voice.model, language)
+    };
+
+    let replacement: Arc<dyn crate::stt::Transcriber> = Arc::new(
+        crate::stt::WhisperTranscriber::new(model, &state.models_dir, language),
+    );
+
+    *state.transcriber.lock().map_err(to_message)? = replacement;
+    tracing::info!(?model, "transcriber rebuilt");
+    Ok(())
+}
+
 /// Everything the Voice pane needs.
 ///
 /// One command rather than several, because the pane's three facts — which models
@@ -922,12 +967,25 @@ pub fn get_voice(state: State<'_, AppState>) -> CommandResult<VoiceView> {
             approximate_mb: id.approximate_bytes() / 1_000_000,
             downloaded: id.path_in(&state.models_dir).exists(),
             selected: id == selected,
+            multilingual: id.is_multilingual(),
         })
         .collect::<Vec<_>>();
 
     let microphone = permissions::microphone();
 
+    let language = {
+        let config = state.config.lock().map_err(to_message)?;
+        config.voice.language.clone()
+    };
+
+    // An explicit non-English language on an English-only model. Not an error to refuse,
+    // because the user may be mid-way through changing both — but it must be visible.
+    let language_ignored =
+        !selected.is_multilingual() && language != crate::config::AUTO_LANGUAGE && language != "en";
+
     Ok(VoiceView {
+        language,
+        language_ignored,
         ready: selected.path_in(&state.models_dir).exists(),
         microphone,
         microphone_explanation: microphone.explanation("Voice input"),
@@ -953,6 +1011,30 @@ pub fn set_speech_model(state: State<'_, AppState>, model: Model) -> CommandResu
         }
     }
 
+    rebuild_transcriber(&state)?;
+    get_voice(state)
+}
+
+/// Sets the spoken language, or `"auto"` to detect it.
+///
+/// Detection is the default and is usually right. Choosing explicitly is an optimisation:
+/// it skips the detection pass, and removes the chance of a short utterance being
+/// detected as the wrong language.
+#[tauri::command]
+pub fn set_voice_language(
+    state: State<'_, AppState>,
+    language: String,
+) -> CommandResult<VoiceView> {
+    {
+        let mut config = state.config.lock().map_err(to_message)?;
+        let previous = std::mem::replace(&mut config.voice.language, language);
+        if let Err(error) = config.save(&state.config_dir) {
+            config.voice.language = previous;
+            return Err(to_message(error));
+        }
+    }
+
+    rebuild_transcriber(&state)?;
     get_voice(state)
 }
 

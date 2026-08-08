@@ -15,96 +15,135 @@ use sha2::{Digest, Sha256};
 
 /// Which model Magi transcribes with.
 ///
-/// English-only variants, because Magi's prompt and its whole interaction are in
-/// English in v1 and the `.en` models are meaningfully better at it per byte than the
-/// multilingual ones of the same size.
+/// Both multilingual and English-only variants, and the **default is multilingual**.
+/// The first version of this offered only the `.en` models, on the reasoning that they
+/// are better per byte at English — which is true, and was the wrong default for a
+/// project aimed at a global contributor base. An `.en` model given Spanish does not
+/// report that it cannot: it writes the English words that sound closest, so the
+/// failure arrives as a confident wrong transcript.
+///
+/// `medium` is deliberately absent. `large-v3-turbo` is better *and* faster at a similar
+/// size, and a menu where one option is strictly worse than another is a worse menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Model {
-    /// 141 MB. The default: good enough for dictation into a panel, and a download
-    /// someone will actually wait for on first launch.
+    /// 148 MB, ~99 languages. The default: understands whatever you speak, and a
+    /// download someone will actually wait for on first launch.
     #[default]
+    Base,
+    /// 141 MB, English only. Slightly better at English than `Base` for the same size.
     BaseEn,
-    /// 465 MB. Noticeably better on accents and technical vocabulary.
+    /// 488 MB, multilingual. Noticeably better on accents and technical vocabulary.
+    Small,
+    /// 466 MB, English only.
     SmallEn,
-    /// 1.4 GB. Better again, and not a first-run download.
-    MediumEn,
+    /// 1.6 GB, multilingual. The most accurate, and faster than the older `medium` it
+    /// replaces.
+    LargeV3Turbo,
 }
 
 impl Model {
-    pub const ALL: [Model; 3] = [Model::BaseEn, Model::SmallEn, Model::MediumEn];
+    pub const ALL: [Model; 5] = [
+        Model::Base,
+        Model::BaseEn,
+        Model::Small,
+        Model::SmallEn,
+        Model::LargeV3Turbo,
+    ];
 
     /// The file name, which is also the name whisper.cpp knows it by.
     pub fn file_name(self) -> &'static str {
         match self {
+            Model::Base => "ggml-base.bin",
             Model::BaseEn => "ggml-base.en.bin",
+            Model::Small => "ggml-small.bin",
             Model::SmallEn => "ggml-small.en.bin",
-            Model::MediumEn => "ggml-medium.en.bin",
+            Model::LargeV3Turbo => "ggml-large-v3-turbo.bin",
+        }
+    }
+
+    /// Whether this model understands languages other than English.
+    ///
+    /// The single most consequential fact about a model here, because getting it wrong
+    /// is silent: an English-only model handed Spanish produces fluent nonsense rather
+    /// than an error.
+    pub fn is_multilingual(self) -> bool {
+        match self {
+            Model::Base | Model::Small | Model::LargeV3Turbo => true,
+            Model::BaseEn | Model::SmallEn => false,
         }
     }
 
     pub fn label(self) -> &'static str {
         match self {
-            Model::BaseEn => "Base",
-            Model::SmallEn => "Small",
-            Model::MediumEn => "Medium",
+            Model::Base => "Base",
+            Model::BaseEn => "Base (English only)",
+            Model::Small => "Small",
+            Model::SmallEn => "Small (English only)",
+            Model::LargeV3Turbo => "Large Turbo",
         }
     }
 
     /// What the user is trading by picking this one.
     pub fn description(self) -> &'static str {
         match self {
+            Model::Base => {
+                "Understands about 99 languages. Fast, and accurate enough for dictating \
+                 a question — the right choice unless you find it mishearing you."
+            }
             Model::BaseEn => {
-                "Fast, and accurate enough for dictating a question. The right choice \
-                 unless you find it mishearing you."
+                "English only, and a little better at it than Base for the same size. \
+                 Speak anything else and it will write English words that sound similar."
+            }
+            Model::Small => {
+                "Multilingual, and noticeably better with accents and technical words. A \
+                 few times slower than Base."
             }
             Model::SmallEn => {
-                "Noticeably better with accents and technical words, and a few times \
-                 slower."
+                "English only. Better with accents and technical words than Base, for \
+                 English."
             }
-            Model::MediumEn => {
-                "The most accurate option, and large enough that transcription becomes \
-                 something you wait for."
+            Model::LargeV3Turbo => {
+                "The most accurate option, multilingual, and faster than its size \
+                 suggests. Large enough that the download is a commitment."
             }
         }
     }
 
     /// Roughly how large the download is, for telling the user before it starts.
     ///
-    /// An **estimate**, and the distinction is load-bearing. Two of these numbers were
-    /// wrong by about twelve thousand bytes when first written, and that would have
-    /// been a real bug rather than a cosmetic one: [`resume_from`] compares what is on
-    /// disk against a total, and a total smaller than the real file makes a *completed*
-    /// download look longer than the model — which discards it and starts again, every
-    /// time, forever.
-    ///
-    /// So the authority for the real length is the `content-length` the server sends,
-    /// and this is only ever used to render "about 465 MB" before a request has been
-    /// made. It also means a model re-uploaded upstream at a slightly different size
-    /// cannot break downloading.
+    /// An **estimate**. Two of these were wrong by about twelve thousand bytes when
+    /// first written from memory, and that would have been a real bug: [`resume_from`]
+    /// compares what is on disk against a total, and a total smaller than the real file
+    /// makes a *completed* download look over-long — which discards it and starts again,
+    /// forever. The server's `content-length` is the authority; this only renders
+    /// "about 488 MB" before a request has been made.
     pub fn approximate_bytes(self) -> u64 {
         match self {
+            Model::Base => 147_951_465,
             Model::BaseEn => 147_964_211,
+            Model::Small => 487_601_967,
             Model::SmallEn => 487_614_201,
-            Model::MediumEn => 1_533_774_781,
+            Model::LargeV3Turbo => 1_624_555_275,
         }
     }
 
     /// The SHA-256 of the file's contents.
     ///
-    /// From HuggingFace's API — `siblings[].lfs.sha256` — and **not** the `ETag` on
-    /// the download URL. The ETag is also sixty-four hex characters, which is exactly
-    /// what makes it dangerous: it looks like the value you want and is not. Verified
-    /// by downloading `ggml-base.en.bin` and hashing it; the content hash matches the
-    /// API and does not match the ETag.
-    ///
-    /// Verifying against the ETag would fail every download on every machine, and the
-    /// failure would look like a corrupt network rather than a wrong constant.
+    /// From HuggingFace's API — `siblings[].lfs.sha256` — and **not** the `ETag` on the
+    /// download URL. The ETag is also sixty-four hex characters, which is exactly what
+    /// makes it dangerous: it looks like the value you want and is not. Verified for
+    /// `base.en` by downloading and hashing it; the content hash matches the API and does
+    /// not match the ETag.
     pub fn sha256(self) -> &'static str {
         match self {
+            Model::Base => "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
             Model::BaseEn => "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002",
+            Model::Small => "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
             Model::SmallEn => "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
-            Model::MediumEn => "cc37e93478338ec7700281a7ac30a10128929eb8f427dda2e865faa8f6da4356",
+            Model::LargeV3Turbo => {
+                "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69"
+            }
         }
     }
 
@@ -122,9 +161,9 @@ impl Model {
 
     /// Where a partial download lives.
     ///
-    /// A separate name so an interrupted download is never mistaken for a usable
-    /// model. Renaming into place only after the checksum passes is what makes a
-    /// half-written file impossible to load.
+    /// A separate name so an interrupted download is never mistaken for a usable model.
+    /// Renaming into place only after the checksum passes is what makes a half-written
+    /// file impossible to load.
     pub fn partial_path_in(self, dir: &Path) -> PathBuf {
         dir.join(format!("{}.partial", self.file_name()))
     }
@@ -288,21 +327,73 @@ mod tests {
 
     #[test]
     fn the_sizes_match_what_the_api_reported_when_they_were_taken() {
-        // Not load-bearing for correctness — the server's content-length is the
-        // authority — but wrong by enough to matter for a progress bar. Two of these
-        // were about twelve thousand bytes out when written from memory, which would
-        // have made a completed download look longer than the model and be discarded.
+        // Not load-bearing — the server's content-length is the authority — but wrong by
+        // enough to matter for a progress bar. Two of these were about twelve thousand
+        // bytes out when written from memory, which would have made a completed download
+        // look longer than the model and be discarded. Instructively, the wrong number I
+        // wrote for `small.en` turned out to be the real size of multilingual `small`:
+        // recall had mixed up the two variants, which is the same mistake as shipping
+        // English-only models by default.
+        assert_eq!(Model::Base.approximate_bytes(), 147_951_465);
         assert_eq!(Model::BaseEn.approximate_bytes(), 147_964_211);
+        assert_eq!(Model::Small.approximate_bytes(), 487_601_967);
         assert_eq!(Model::SmallEn.approximate_bytes(), 487_614_201);
-        assert_eq!(Model::MediumEn.approximate_bytes(), 1_533_774_781);
+        assert_eq!(Model::LargeV3Turbo.approximate_bytes(), 1_624_555_275);
     }
 
     #[test]
-    fn the_default_is_the_smallest_download() {
-        // First launch. 1.4 GB is not a first-run experience.
-        assert_eq!(Model::default(), Model::BaseEn);
-        assert!(Model::BaseEn.approximate_bytes() < Model::SmallEn.approximate_bytes());
-        assert!(Model::SmallEn.approximate_bytes() < Model::MediumEn.approximate_bytes());
+    fn the_default_is_multilingual_and_the_smallest_of_those() {
+        // The first version defaulted to English-only. For a project aimed at a global
+        // contributor base that was the wrong choice, and it fails silently: an `.en`
+        // model handed Spanish writes English words that sound similar rather than
+        // reporting that it cannot.
+        assert_eq!(Model::default(), Model::Base);
+        assert!(Model::default().is_multilingual());
+
+        let smallest_multilingual = Model::ALL
+            .iter()
+            .filter(|m| m.is_multilingual())
+            .min_by_key(|m| m.approximate_bytes())
+            .copied();
+        assert_eq!(smallest_multilingual, Some(Model::default()));
+    }
+
+    #[test]
+    fn every_english_only_model_says_so_in_its_label_and_description() {
+        // The trap this whole change exists to close. Someone scanning a list must be able
+        // to see which options will not understand them.
+        for model in Model::ALL.iter().filter(|m| !m.is_multilingual()) {
+            assert!(
+                model.label().contains("English only"),
+                "{model:?} does not say so in its label"
+            );
+            assert!(
+                model.description().contains("English only"),
+                "{model:?} does not say so in its description"
+            );
+        }
+
+        for model in Model::ALL.iter().filter(|m| m.is_multilingual()) {
+            assert!(
+                !model.label().contains("English only"),
+                "{model:?} is multilingual but labelled otherwise"
+            );
+        }
+    }
+
+    #[test]
+    fn the_file_name_tells_the_truth_about_multilingual_support() {
+        // whisper.cpp's own convention: `.en` in the name means English-only. A variant
+        // added later with the flag set wrongly would transcribe silently badly.
+        for model in Model::ALL {
+            let english_only_name = model.file_name().contains(".en.");
+            assert_eq!(
+                english_only_name,
+                !model.is_multilingual(),
+                "{model:?}: file name {} disagrees with is_multilingual()",
+                model.file_name()
+            );
+        }
     }
 
     #[test]
@@ -443,7 +534,7 @@ mod tests {
         // Asserted as a range rather than an exact 50, because the total is odd — my
         // first version of this test asserted 50 and got 49, which was the test being
         // wrong about integer division rather than the code being wrong.
-        let total = Model::MediumEn.approximate_bytes();
+        let total = Model::LargeV3Turbo.approximate_bytes();
         let progress = Progress {
             downloaded: total / 2,
             total,

@@ -121,7 +121,14 @@ fn finish(app: &tauri::AppHandle) {
             return;
         };
 
-        let result = state.transcriber.transcribe(&captured.samples);
+        // Cloned, and the lock released before inference. Holding it for the seconds a
+        // transcription takes would freeze Settings, and a model swapped mid-transcription
+        // should not cut off the one already running.
+        let Ok(transcriber) = state.transcriber.lock().map(|t| t.clone()) else {
+            return;
+        };
+
+        let result = transcriber.transcribe(&captured.samples);
         let _ = app.emit("magi://voice", VoiceState::Idle);
 
         match result {

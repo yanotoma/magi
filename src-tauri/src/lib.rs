@@ -73,6 +73,10 @@ pub fn run() {
             let active = config.active.clone();
             let push_to_talk = config.hotkey.push_to_talk.clone();
             let config_voice_model = config.voice.model;
+            // `None` means detect. The config stores "auto" as a string because it also
+            // has to survive being hand-edited; the transcriber wants the absence.
+            let config_voice_language = (config.voice.language != crate::config::AUTO_LANGUAGE)
+                .then(|| config.voice.language.clone());
 
             // Probe results, if any exist. Infallible: a missing or unreadable file
             // means nothing has been probed yet, which is an ordinary first-run
@@ -93,8 +97,12 @@ pub fn run() {
 
             app.manage(AppState {
                 microphone: Box::new(crate::audio::Microphone::new()),
-                transcriber: Box::new(crate::stt::WhisperTranscriber::new(
-                    config_voice_model.path_in(&models_dir),
+                transcriber: Mutex::new(std::sync::Arc::new(
+                    crate::stt::WhisperTranscriber::new(
+                        config_voice_model,
+                        &models_dir,
+                        config_voice_language,
+                    ),
                 )),
                 http: reqwest::Client::new(),
                 http_blocking: reqwest::blocking::Client::new(),
@@ -144,6 +152,7 @@ pub fn run() {
             commands::set_hotkey,
             commands::get_voice,
             commands::set_speech_model,
+            commands::set_voice_language,
             commands::download_speech_model,
             commands::remove_speech_model,
             commands::open_permission_settings,
