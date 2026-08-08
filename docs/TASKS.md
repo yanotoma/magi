@@ -5,7 +5,7 @@ Complete breakdown of what is done and what is pending, across every milestone.
 **Last updated:** 2026-08-07
 **Current phase:** M4 — audio and speech-to-text, targeting `0.3.0-alpha.1`
 **Current version:** `0.2.0-alpha.2` (released — see [VERSIONING.md](VERSIONING.md))
-**Overall:** 98 / 157 tasks done (62%)
+**Overall:** 101 / 159 tasks done (64%)
 
 Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 
@@ -20,10 +20,10 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 | **M2** | Config & providers | `0.2.0-alpha.1` | 28 | 28 | ✅ Shipped |
 | **M3** | Pre-flight & capability tiers | `0.2.0-alpha.2` | 13 | 14 | ✅ Shipped |
 | **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 27 | 27 | ✅ Shipped |
-| **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 0 | 13 | ⬜ |
+| **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 3 | 15 | ⬜ |
 | **M6** | Session machine & panel UX | `0.5.0-beta.1` | 0 | 16 | ⬜ |
 | **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 14 | ⬜ |
-| — | **v1 total** | `1.0.0` | **98** | **143** | |
+| — | **v1 total** | `1.0.0` | **101** | **145** | |
 | **M8** | v2 — wake word & TTS | `1.1.0` | 0 | 9 | 🔮 Post-v1 |
 | **M9** | v3 — computer use | `1.2.0` | 0 | 5 | 🔮 Post-v1 |
 
@@ -203,16 +203,18 @@ Deliberately not the session state machine, which is M6's. This is the smallest 
 - [ ] `capture` module — enumerate displays and windows via `xcap`
 - [ ] Capture the active display as PNG bytes
 - [ ] Capture a specific window
-- [ ] Downscale before encoding — vision token cost scales with resolution
+- [x] Downscale before encoding — vision token cost scales with resolution
 - [ ] `ScreenCapture` trait plus a fake returning a fixture image
 - [ ] Screen Recording permission handling, including the restart-required path
 - [ ] `llm::tools` — define the `capture_screen` tool schema
 - [ ] Tool-call execution loop: `tool_use` → capture → resend with image
 - [ ] Guard against capture loops (cap calls per turn)
-- [ ] Tier 2 deictic heuristic ("here", "this", "this error", "this screen", …)
-- [ ] Unit tests for deictic detection, including negative cases
+- [x] Tier 2 deictic heuristic — `asks_about_the_screen(text)` detects phrases in English and Spanish that imply the user wants the screen seen ("here", "this screen", "this error", "acá", "esta pantalla", …) and returns the longest match and its language so the capture audit log can say why. Matching is over tokens, not substrings, so "this" does not fire inside "thistle". Two words excluded with tests: English "that" (a conjunction far more often than a demonstrative) and Spanish "está" ("is") — without the exclusion, an accent-stripping normaliser folds "está" into "esta" ("this") and "¿está funcionando?" becomes a request for a screenshot. Spanish was not in the design doc's examples, which were written before M4 shipped speech in eleven languages — an English-only list means a Spanish speaker on a Tier 2 model silently never gets a capture
+- [x] Unit tests for deictic detection, including negative cases
 - [ ] Emit `magi://captured` so the panel can show a capture indicator
 - [ ] Capture audit log, visible in Settings
+- [ ] Extend the deictic heuristic to the remaining nine Settings languages — pt, fr, de, it, nl, ja, zh, ko, ru. A user who selects any of these gets a Tier 2 model that silently never captures, because "no match" is indistinguishable from "nothing to look at". Adding a language is adding rows to a table, but each row must be verified by a speaker of that language and cross-checked against all existing rows for collisions: a word that means "the" in one language and "this" in another would fire on every sentence
+- [ ] Correct the vision token figure in `docs/superpowers/specs/2026-08-06-magi-design.md` section 5 — it states a 1512×982 screenshot costs "roughly 1,100 vision tokens on Claude", but Anthropic's current formula (`ceil(w/28) * ceil(h/28)`, standard-tier cap 1568) yields 1944 for that size. The conclusion is unaffected — images dominate cost — but a stale number in a design doc reads as authoritative and will mislead the next reader
 
 ---
 

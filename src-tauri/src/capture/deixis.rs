@@ -71,6 +71,17 @@ const TRIGGERS: &[Trigger] = &[
         words: &["aquí"],
         language: "es",
     },
+    // "acá" outranks "aquí" across most of Latin America, and Magi's first user is
+    // Peruvian. Leaving it out would have made the heuristic quietly worse for exactly
+    // the speakers it was extended for.
+    Trigger {
+        words: &["aca"],
+        language: "es",
+    },
+    Trigger {
+        words: &["acá"],
+        language: "es",
+    },
     // Explicit references to the display itself.
     Trigger {
         words: &["this", "screen"],
@@ -323,6 +334,15 @@ mod tests {
         assert!(fires("puedes ver esta pantalla"));
         assert!(fires("qué hay aquí"));
         assert!(fires("mira lo que estoy viendo"));
+    }
+
+    #[test]
+    fn the_latin_american_here_fires_as_well_as_the_peninsular_one() {
+        // "acá" is the ordinary word for "here" across most of Latin America. A list with
+        // only "aquí" is not wrong so much as narrower than the speakers it serves.
+        assert!(fires("qué hay acá"));
+        assert!(fires("que hay aca"));
+        assert!(fires("mira acá"));
     }
 
     #[test]
