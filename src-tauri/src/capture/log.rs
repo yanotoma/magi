@@ -80,7 +80,7 @@ where
         "asked_by",
         match reason {
             Reason::ModelAsked { .. } => "model",
-            Reason::PhraseMatched { .. } => "you",
+            Reason::PhraseMatched { .. } | Reason::UserAsked => "you",
         },
     )?;
     state.end()

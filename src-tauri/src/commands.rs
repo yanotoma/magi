@@ -88,7 +88,13 @@ pub struct AppState {
     /// The screen. Behind the trait, so the tests that matter — which display was chosen,
     /// how big the result is — need no display attached, and so a Linux build has something
     /// to hold at all.
-    pub screen: Box<dyn crate::capture::ScreenCapture>,
+    ///
+    /// `Arc` rather than `Box`, for the same reason as [`secrets`]: a capture is a
+    /// synchronous round trip through the window server and `CLAUDE.md` requires it on
+    /// `spawn_blocking`, which needs an owned handle to move into the closure.
+    ///
+    /// [`secrets`]: AppState::secrets
+    pub screen: Arc<dyn crate::capture::ScreenCapture>,
 
     /// Every screenshot this run has taken, and why.
     ///
@@ -1196,6 +1202,57 @@ pub async fn request_screen_recording(app: tauri::AppHandle) -> CommandResult<Ca
 
     use tauri::Manager;
     get_capture(app.state::<AppState>())
+}
+
+/// Takes one screenshot, on purpose, so the user can see whether screen reading works.
+///
+/// The same idea as the pre-flight probes: find out before relying on it. Screen recording
+/// fails in ways that produce no error — a permission granted to an app that is already
+/// running does not take effect, and the API this replaced returned a picture of an empty
+/// desktop rather than complaining — so a button that says "it worked, and here is the size
+/// and what it would have cost" is worth more than a status badge.
+///
+/// The image itself is discarded. What is kept is the log entry, which is the evidence.
+/// Showing the screenshot back would mean holding a megabyte of someone's screen in a
+/// settings window for as long as it stayed open, to tell them something the dimensions
+/// already tell them.
+#[tauri::command]
+pub async fn test_capture(app: tauri::AppHandle) -> CommandResult<CaptureView> {
+    use tauri::Manager;
+
+    // `spawn_blocking`, not merely `async`. A capture is a synchronous round trip through
+    // the window server, and an async command runs on a runtime worker — holding one of
+    // those for the duration would starve everything else that runtime polls, which is the
+    // same reason transcription goes to the blocking pool.
+    let screen = Arc::clone(&app.state::<AppState>().screen);
+    let capture = tauri::async_runtime::spawn_blocking(move || screen.capture_active_display())
+        .await
+        .map_err(to_message)?
+        .map_err(to_message)?;
+
+    let state = app.state::<AppState>();
+    state.capture_log.record(crate::capture::Entry {
+        at: unix_millis(),
+        subject: capture.subject.clone(),
+        reason: crate::llm::tools::Reason::UserAsked,
+        width: capture.width,
+        height: capture.height,
+        visual_tokens: capture.visual_tokens(),
+    });
+
+    get_capture(state)
+}
+
+/// Now, in milliseconds since the Unix epoch.
+///
+/// Saturates at zero rather than propagating: a clock set before 1970 is not a reason to
+/// refuse a screenshot, and an entry timestamped zero is visibly wrong in a way a missing
+/// entry is not.
+fn unix_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_millis().min(u64::MAX as u128) as u64)
+        .unwrap_or(0)
 }
 
 /// Forgets every recorded capture.

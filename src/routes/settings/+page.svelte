@@ -21,6 +21,7 @@
     getCapture,
     clearCaptureLog,
     requestScreenRecording,
+    testCapture,
     type ModelCapability,
     type VoiceView,
     type SpeechModel,
@@ -917,6 +918,18 @@
 
         <h2 class="spaced">Captures this session</h2>
         <p class="hint">Kept in memory only — not written to disk.</p>
+
+        <!--
+          The same idea as the model pre-flight probes: find out before relying on it.
+          Screen recording fails silently in more than one way — a permission granted to a
+          running app does not take effect until it is reopened — so trying it once is the
+          only honest way to know it works.
+        -->
+        {#if capture.screen_recording === "granted"}
+          <button type="button" onclick={() => runCapture(testCapture)}>
+            Take a test screenshot
+          </button>
+        {/if}
 
         {#if capture.entries.length === 0}
           <p class="empty">Magi has not read your screen.</p>

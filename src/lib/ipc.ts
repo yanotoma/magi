@@ -343,6 +343,16 @@ export const getCapture = async (): Promise<CaptureView> =>
 export const requestScreenRecording = async (): Promise<CaptureView> =>
   invoke<CaptureView>("request_screen_recording");
 
+/**
+ * Takes one screenshot deliberately, so the user can confirm screen reading works.
+ *
+ * The image is not returned. What comes back is the refreshed view, whose newest log entry
+ * is the evidence — dimensions and token cost included. Screen recording fails in ways that
+ * produce no error, so trying it is the only way to know.
+ */
+export const testCapture = async (): Promise<CaptureView> =>
+  invoke<CaptureView>("test_capture");
+
 export const clearCaptureLog = async (): Promise<CaptureView> =>
   invoke<CaptureView>("clear_capture_log");
 

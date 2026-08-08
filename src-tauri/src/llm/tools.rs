@@ -77,6 +77,14 @@ pub enum Reason {
 
     /// The Tier 2 heuristic matched a phrase in what the user said.
     PhraseMatched { phrase: String, language: String },
+
+    /// The user pressed the test button in Settings.
+    ///
+    /// Its own variant rather than being folded into the others, because the log has to be
+    /// honest about it: a test capture is not evidence that a model asked for anything, and
+    /// a user reviewing the list should be able to tell the one they caused from the ones
+    /// they did not.
+    UserAsked,
 }
 
 impl Reason {
@@ -103,6 +111,7 @@ impl Reason {
         match self {
             Reason::ModelAsked { reason } => format!("the model asked: {reason}"),
             Reason::PhraseMatched { phrase, .. } => format!("you said \"{phrase}\""),
+            Reason::UserAsked => "you asked for a test screenshot".to_string(),
         }
     }
 }
@@ -237,6 +246,15 @@ mod tests {
             }
         );
         assert_eq!(reason.describe(), "the model asked: read the stack trace");
+    }
+
+    #[test]
+    fn a_test_capture_does_not_claim_a_model_asked_for_it() {
+        // The log must not launder a capture the user caused into one a model requested.
+        assert_eq!(
+            Reason::UserAsked.describe(),
+            "you asked for a test screenshot"
+        );
     }
 
     #[test]

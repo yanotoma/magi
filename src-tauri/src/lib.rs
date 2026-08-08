@@ -117,9 +117,9 @@ pub fn run() {
                 // links and runs rather than needing a second `AppState` shape. Nothing
                 // reaches this yet — the tool-call loop that would is M5's remaining work.
                 #[cfg(target_os = "macos")]
-                screen: Box::new(crate::capture::ScreenCaptureKit::new()),
+                screen: std::sync::Arc::new(crate::capture::ScreenCaptureKit::new()),
                 #[cfg(not(target_os = "macos"))]
-                screen: Box::new(crate::capture::FakeCapture::headless()),
+                screen: std::sync::Arc::new(crate::capture::FakeCapture::headless()),
                 capture_log: std::sync::Arc::new(crate::capture::CaptureLog::new()),
                 in_flight: Mutex::new(None),
             });
@@ -166,6 +166,7 @@ pub fn run() {
             commands::get_capture,
             commands::clear_capture_log,
             commands::request_screen_recording,
+            commands::test_capture,
             commands::open_permission_settings,
             commands::send_text_turn,
             commands::cancel_turn,
