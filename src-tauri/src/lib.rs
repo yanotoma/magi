@@ -158,6 +158,7 @@ pub fn run() {
             commands::remove_speech_model,
             commands::get_capture,
             commands::clear_capture_log,
+            commands::request_screen_recording,
             commands::open_permission_settings,
             commands::send_text_turn,
             commands::cancel_turn,

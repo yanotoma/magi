@@ -20,6 +20,7 @@
     onDownloadProgress,
     getCapture,
     clearCaptureLog,
+    requestScreenRecording,
     type ModelCapability,
     type VoiceView,
     type SpeechModel,
@@ -888,16 +889,30 @@
         </div>
 
         <!--
-          `denied` is the only state worth a button, and unlike the microphone it is also
-          the only negative state that exists here: the backend reads this permission from
-          `CGPreflightScreenCaptureAccess`, which returns a bare bool, so "never asked" and
-          "explicitly refused" are indistinguishable and both arrive as `denied`. There is
-          no `restricted` or `not-asked` case to handle — see `permissions::screen_recording`.
+          Two buttons, in the order the work has to happen.
+
+          "Ask macOS" comes first because it is what puts Magi in the Screen Recording list
+          at all. That list is built from apps that have requested the permission, and
+          reading the state registers nothing — so a user sent straight to System Settings
+          finds no Magi to switch on. Reported from a real first run.
+
+          `denied` is also the only negative state that exists here: the permission is read
+          from `CGPreflightScreenCaptureAccess`, which returns a bare bool, so "never asked"
+          and "explicitly refused" are indistinguishable and both arrive as `denied`.
         -->
         {#if capture.screen_recording === "denied"}
-          <button type="button" onclick={() => openPermissionSettings("screen-recording")}>
-            Open Privacy &amp; Security
-          </button>
+          <div class="form-actions">
+            <button type="button" onclick={() => runCapture(requestScreenRecording)}>
+              Ask macOS for permission
+            </button>
+            <button
+              type="button"
+              class="link"
+              onclick={() => openPermissionSettings("screen-recording")}
+            >
+              Open Privacy &amp; Security
+            </button>
+          </div>
         {/if}
 
         <h2 class="spaced">Captures this session</h2>

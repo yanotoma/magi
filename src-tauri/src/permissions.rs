@@ -165,9 +165,103 @@ pub fn screen_recording() -> Permission {
     Permission::NotApplicable
 }
 
+/// Asks macOS for screen-recording access, and returns the state afterwards.
+///
+/// **The only way for Magi to appear in Privacy & Security at all.** That pane is populated
+/// from apps that have *requested* the permission; `CGPreflightScreenCaptureAccess` only
+/// reads the state and registers nothing. So a first-run user who is told to "turn it on in
+/// System Settings" finds no Magi in the list and no way to add one — which is exactly what
+/// happened, because the request call was left unwired on the reasoning that it should only
+/// run when a user asks for it. That reasoning is right; the missing half was giving them
+/// somewhere to ask.
+///
+/// Prompts, and on macOS 12 and later opens System Settings rather than showing an in-app
+/// dialog. **Never call it while merely drawing a screen** — only from an explicit action.
+///
+/// The returned value is the state as macOS sees it *now*, which will almost always be
+/// [`Permission::Denied`] even on success: the user has yet to flick the switch, and the
+/// grant does not reach a running process anyway.
+#[cfg(target_os = "macos")]
+pub fn request_screen_recording() -> Permission {
+    if objc2_core_graphics::CGRequestScreenCaptureAccess() {
+        Permission::Granted
+    } else {
+        Permission::Denied
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn request_screen_recording() -> Permission {
+    Permission::NotApplicable
+}
+
+/// What to tell the user about screen reading.
+///
+/// Not [`Permission::explanation`], and the difference is not cosmetic. That text says
+/// "turn it on in System Settings", which presumes Magi is listed there — true of the
+/// microphone, whose prompt appears at first use and which is listed from then on. Screen
+/// recording has no in-app prompt and no `NotAsked` state to detect, so "denied" covers
+/// both "you refused" and "nobody has ever asked", and in the second case the instruction
+/// is impossible to follow: there is nothing named Magi in the list to switch on.
+///
+/// So this says what to do first, and what to do after.
+pub fn screen_reading_explanation(state: Permission) -> String {
+    match state {
+        Permission::Granted | Permission::NotApplicable => {
+            "Magi can read your screen when a model asks to look.".to_string()
+        }
+        // Unreachable for this permission — `CGPreflightScreenCaptureAccess` returns a
+        // bool. Handled rather than ignored so a future macOS that distinguishes them does
+        // not fall through to a wrong sentence.
+        Permission::NotAsked | Permission::Denied => "Magi cannot read your screen yet.              Ask macOS for permission below — that adds Magi to System Settings › Privacy              & Security › Screen Recording, where you can switch it on. macOS does not              give the permission to an app that is already running, so quit and reopen              Magi afterwards."
+            .to_string(),
+        Permission::Restricted => "Screen reading is blocked by a configuration profile on              this Mac, which only whoever manages it can change."
+            .to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_screen_reading_explanation_says_to_ask_before_it_says_to_switch_on() {
+        // The bug this text exists to fix, reported from a real first run: told to turn the
+        // permission on in System Settings, the user found no Magi in the list. Nothing had
+        // ever requested the permission, so macOS had nothing to list. The order matters —
+        // ask first, then switch on.
+        let denied = screen_reading_explanation(Permission::Denied);
+        let ask = denied.find("Ask macOS").expect("must say to ask");
+        let switch = denied.find("switch it on").expect("must say to switch on");
+        assert!(
+            ask < switch,
+            "the instructions are in the wrong order: {denied}"
+        );
+
+        // And it must not repeat the generic advice, which presumes Magi is already listed.
+        assert!(
+            !denied.contains("Turn it on in System Settings"),
+            "reusing the generic wording sends the user to an empty list: {denied}"
+        );
+
+        // Never-asked and denied are indistinguishable here, so they must read identically
+        // rather than one of them promising a prompt that will not appear.
+        assert_eq!(denied, screen_reading_explanation(Permission::NotAsked));
+    }
+
+    #[test]
+    fn a_granted_screen_says_what_will_happen_not_that_nothing_is_wrong() {
+        let granted = screen_reading_explanation(Permission::Granted);
+        assert!(granted.contains("when a model asks"), "{granted}");
+    }
+
+    #[test]
+    fn a_managed_mac_is_not_told_to_go_to_settings() {
+        // Same reasoning as the microphone: the pane holds a switch the user cannot move.
+        let restricted = screen_reading_explanation(Permission::Restricted);
+        assert!(!restricted.contains("Ask macOS"), "{restricted}");
+        assert!(restricted.contains("configuration profile"), "{restricted}");
+    }
 
     #[test]
     fn reading_the_screen_recording_state_does_not_prompt_or_panic() {

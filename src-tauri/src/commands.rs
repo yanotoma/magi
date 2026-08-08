@@ -1159,14 +1159,38 @@ pub fn get_capture(state: tauri::State<'_, AppState>) -> CommandResult<CaptureVi
 
     Ok(CaptureView {
         screen_recording,
-        // "Screen reading" rather than "Screen Recording": the permission is called the
-        // latter by macOS, but Magi takes still screenshots on request and describing that
-        // as recording invites the reading that it is always watching.
-        screen_recording_explanation: screen_recording.explanation("Screen reading"),
+        // A screen-specific explanation rather than `Permission::explanation`. The generic
+        // text says "turn it on in System Settings", which presumes Magi is listed there —
+        // and it is not until something has requested the permission. See
+        // `permissions::screen_reading_explanation`.
+        screen_recording_explanation: permissions::screen_reading_explanation(screen_recording),
         screen_recording_settings_url: permissions::settings_url(PermissionKind::ScreenRecording)
             .to_string(),
         entries: state.capture_log.entries(),
     })
+}
+
+/// Asks macOS for screen-recording access.
+///
+/// `async` and on `spawn_blocking` rather than a plain synchronous command, for the reason
+/// written into this project's hard rules: a synchronous `#[tauri::command] fn` runs on the
+/// main thread, and anything that may put system UI in front of the user must not. The
+/// keychain taught that lesson expensively — a call that reads like a cheap getter turned
+/// out to wait on a dialog only the main thread could have drawn, and the app deadlocked
+/// with no error anywhere. `CGRequestScreenCaptureAccess` is not documented to block, which
+/// is not the same as documented not to.
+///
+/// Called only from an explicit button. It opens System Settings as a side effect, which is
+/// welcome when someone asked for it and startling otherwise.
+#[tauri::command]
+pub async fn request_screen_recording(app: tauri::AppHandle) -> CommandResult<CaptureView> {
+    // The result is deliberately discarded. It reports the state as macOS sees it *now*,
+    // which is "denied" even on success — the user has yet to flick the switch. What matters
+    // is the side effect: Magi now exists in that list.
+    let _ = tauri::async_runtime::spawn_blocking(permissions::request_screen_recording).await;
+
+    use tauri::Manager;
+    get_capture(app.state::<AppState>())
 }
 
 /// Forgets every recorded capture.

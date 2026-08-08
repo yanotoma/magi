@@ -332,6 +332,17 @@ export const getCapture = async (): Promise<CaptureView> =>
  * The log is never written to disk — this clears only what has accumulated
  * since launch.
  */
+/**
+ * Asks macOS for screen-recording permission.
+ *
+ * The only way Magi appears in System Settings › Privacy & Security › Screen Recording at
+ * all: that list is built from apps that have *requested* the permission, and reading the
+ * state registers nothing. Opens System Settings as a side effect, so only ever call it
+ * from an explicit action.
+ */
+export const requestScreenRecording = async (): Promise<CaptureView> =>
+  invoke<CaptureView>("request_screen_recording");
+
 export const clearCaptureLog = async (): Promise<CaptureView> =>
   invoke<CaptureView>("clear_capture_log");
 
