@@ -377,6 +377,10 @@ at 14.0.
 Lowering the floor later only widens support; it can never strand someone who already runs
 Magi, which is why taking the simple path first is safe.
 
+**The maintainer has since said they do not need to support older macOS versions**, so the
+task below is recorded rather than planned. Do not spend effort on it without someone asking
+for it — it is a fair amount of machinery for two macOS versions nobody has asked about.
+
 - [ ] Capture on macOS 12.3 through 13 via `SCStream`, to lower the minimum from 14. Needs
       an `SCStreamOutput` delegate implemented with `objc2`'s `define_class!`, a stream
       started and stopped around a single frame, and a `CMSampleBuffer` converted to pixels

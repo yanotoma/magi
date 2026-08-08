@@ -113,6 +113,13 @@ pub fn run() {
                 secrets: std::sync::Arc::new(KeyringStore),
                 key_hints: Mutex::new(std::collections::HashMap::new()),
                 capabilities: Mutex::new(capabilities),
+                // ScreenCaptureKit on macOS; the fake everywhere else, so a Linux build
+                // links and runs rather than needing a second `AppState` shape. Nothing
+                // reaches this yet — the tool-call loop that would is M5's remaining work.
+                #[cfg(target_os = "macos")]
+                screen: Box::new(crate::capture::ScreenCaptureKit::new()),
+                #[cfg(not(target_os = "macos"))]
+                screen: Box::new(crate::capture::FakeCapture::headless()),
                 capture_log: std::sync::Arc::new(crate::capture::CaptureLog::new()),
                 in_flight: Mutex::new(None),
             });

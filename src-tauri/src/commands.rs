@@ -85,6 +85,11 @@ pub struct AppState {
     /// in an editor and paste into bug reports.
     pub models_dir: PathBuf,
 
+    /// The screen. Behind the trait, so the tests that matter — which display was chosen,
+    /// how big the result is — need no display attached, and so a Linux build has something
+    /// to hold at all.
+    pub screen: Box<dyn crate::capture::ScreenCapture>,
+
     /// Every screenshot this run has taken, and why.
     ///
     /// `Arc` because the capture path records from a `spawn_blocking` worker while Settings
