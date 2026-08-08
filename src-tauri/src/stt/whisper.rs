@@ -154,10 +154,18 @@ fn params<'a>(language: Option<&'a str>) -> FullParams<'a, 'a> {
 
     params.set_n_threads(thread_count());
 
-    // `None` means detect. Whisper needs `detect_language` set as well, or a `None`
-    // language falls back to English rather than being inferred.
+    // `None` means detect, and that is the whole of it.
+    //
+    // `set_detect_language(true)` was here as well, on reasoning I invented: that a `None`
+    // language falls back to English unless detection is asked for separately. It does
+    // not. whisper.cpp's own source handles `language == nullptr` as auto-detect, and
+    // `detect_language` is a different mode entirely — it detects and then
+    // `return 0`, transcribing nothing. The symptom was a confident language reading with
+    // zero segments, which is exactly what that code path produces.
+    //
+    // whisper-rs's doc comment on the setter says it "has the same effect as setting the
+    // language to auto or None", which is wrong. The C source is the authority.
     params.set_language(language);
-    params.set_detect_language(language.is_none());
 
     // Transcribe, never translate. Someone speaking Spanish wants Spanish text: silently
     // rendering it in English would be a different feature, and one they did not ask for.

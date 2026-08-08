@@ -87,7 +87,13 @@ Two rules follow:
 - **Default to multilingual.** An English-only model is an option someone chooses knowing the trade, never the one they get by accident.
 - **Never let a language setting appear to apply to an `.en` model.** Force English at the parameters and say so in the UI. Honouring the setting would be a promise the model cannot keep.
 
-`params.set_language(None)` alone does **not** mean detect — it falls back to English. `set_detect_language(true)` has to be set with it.
+**`params.set_language(None)` alone *is* auto-detect. Never also call `set_detect_language(true)`.**
+
+That combination silently breaks transcription. whisper.cpp's `detect_language` is a different mode: it identifies the language and then `return 0`, transcribing nothing. The symptom is a log line reporting the language with good confidence followed by zero segments, which reads exactly like a model that heard nothing.
+
+whisper-rs's doc comment on the setter says it "has the same effect as setting the language to auto or None". That is wrong, and I believed it — then compounded it by inventing a justification and writing *here* that a `None` language falls back to English unless detection is requested separately. It does not. `whisper.cpp` around line 6812 handles `language == nullptr` as auto-detect on its own.
+
+**The C source outranks the binding's documentation.** `whisper-rs-sys-*/whisper.cpp/src/whisper.cpp` is in the cargo registry and greppable.
 
 And `set_translate(false)`, always. Someone speaking Spanish wants Spanish text; translating silently is a different feature they did not ask for.
 
@@ -102,6 +108,22 @@ Magi did exactly that and two seconds of Spanish came back as zero segments: the
 **Log the raw segment count next to the kept one.** When they disagree, the audio reached the model and something after it discarded the answer — a different problem from the model hearing nothing, and the two are indistinguishable in a log that reports only one number. That gap is what made the bug above take a user report to find.
 
 Also worth setting: `set_suppress_blank(true)` and `set_suppress_nst(true)`, which stop the blank and non-speech tokens at the source instead of filtering them afterwards.
+
+## Test the pipeline with real speech, not with tones
+
+A synthetic tone proves resampling preserves energy and proves nothing about whether the model produces words. Two separate bugs here — an over-aggressive segment filter, and `detect_language` — passed every unit test and both produced empty transcripts.
+
+macOS can generate the input, which makes the check cheap:
+
+```bash
+say -v Paulina -o /tmp/speech.aiff "Hola, por qué falla este build"
+afconvert -f WAVE -d LEI16@16000 -c 1 /tmp/speech.aiff /tmp/16k.wav
+afconvert -f WAVE -d LEI16@44100 -c 1 /tmp/speech.aiff /tmp/44k.wav
+```
+
+Run both through the real transcriber — the 16 kHz file directly, the 44.1 kHz one through the resampler. Feeding both isolates which stage loses the words, and reporting peak and RMS alongside separates "the audio is wrong" from "the parameters are wrong". Here the audio was fine at peak 0.57 either way, which pointed straight at the parameters.
+
+Worth knowing what healthy levels look like: speech at a normal distance peaks around 0.1–0.6. Room noise peaks around 0.03. A peak of exactly 0.0 means the stream opened and delivered silence, which is what macOS does when microphone access is not granted — and cpal reports no error for it.
 
 ## Building
 
