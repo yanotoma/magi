@@ -325,3 +325,19 @@ Recorded so they are not re-proposed.
 - [ ] Linux packaging
 - [ ] Issue and PR templates
 - [ ] Community wake-word model contributions
+
+---
+
+## Deferred: native audio input
+
+Outside the summary table on purpose: `tools/task_counts.py` only counts sections whose
+heading starts with a milestone number, so nothing here inflates a denominator for work
+that is not scheduled. Ticking a box in this section will not move the totals — move the
+task into a milestone when it is scheduled, and the count follows.
+
+**Design decision — local STT is the intended path, not a fallback.** Whether Magi could detect native audio support and route voice input directly to a capable model was considered and deliberately deferred. Local whisper.cpp transcription is the *design* for three reasons: the design doc and Settings copy commit to local-only processing ("Transcription happens on this Mac. Nothing you say is sent anywhere"); `voice.rs` puts the transcript in the panel input so a mis-transcription can be corrected before it reaches the model — native audio input removes that review step; and most target providers (Ollama, LM Studio, local runtimes) accept no audio at all, so a primary path that depends on native support inverts the model-agnostic goal. The useful extension is detection and opt-in bypass for providers that genuinely support it, not a default replacement.
+
+- [ ] Add a `hears` field to `Capabilities` in `src-tauri/src/llm/capability.rs`, recorded by the pre-flight probe and displayed in Settings alongside `vision`, `tools`, and `structured_output`. The field must not affect tier assignment — exact precedent is `structured_output`, documented "Recorded but not used for tier assignment; see [`Tier`]. It is shown in Settings because it explains capabilities that arrive in later milestones."
+- [ ] Commit a small pre-recorded speech asset to `assets/probe/` — a single spoken word, ~16 kHz mono WAV, ≤ 50 KB — for use by the audio probe. A synthetic tone is not sufficient: a provider that accepts an audio payload and ignores it must fail the probe, so only a probe that sends recognizable speech and checks the transcript can distinguish "accepting" from "hearing". The vision probe applies the same logic: it generates a digit image locally and asks the model to read back a specific digit.
+- [ ] Implement the audio probe: send the committed asset to the provider and ask what word was spoken; set `hears: true` only if the response names the word. Follow the architecture of the vision probe in `src-tauri/src/llm/probe.rs`.
+- [ ] Add an opt-in "Send audio directly to model" toggle in Settings, off by default, visible only when the active model's `hears` field is `true`. When on, voice input bypasses whisper.cpp and sends the raw audio to the provider. The setting's description must state explicitly what this trades: the local-only privacy promise (audio leaves the device) and the transcript review step (a mis-transcription becomes a confident wrong question). Off by default and honest about the trade-off are not negotiable — local STT is the design; direct audio is the exception.
