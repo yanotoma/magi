@@ -127,9 +127,64 @@ pub fn microphone() -> Permission {
     Permission::NotApplicable
 }
 
+/// Reads screen-recording authorisation without prompting.
+///
+/// **Only ever two answers, unlike the microphone.** `CGPreflightScreenCaptureAccess`
+/// returns a bare `bool`, and there is no screen-recording equivalent of
+/// `AVAuthorizationStatus::NotDetermined` — "never asked" and "explicitly denied" both
+/// come back `false`. That is not an omission in the binding: macOS never shows an
+/// in-app prompt for screen recording the way it does for the microphone, it sends the
+/// user to System Settings, so the two states would lead to the same instruction anyway.
+///
+/// [`Permission::Restricted`] is likewise unreachable here. Apple documents no managed
+/// or profile-restricted state for this permission, and a `bool` could not express one.
+///
+/// The companion `CGRequestScreenCaptureAccess` is deliberately not called anywhere in
+/// Magi: it opens System Settings as a side effect, which is a thing to do when a user
+/// asks for it and not while drawing a settings pane.
+#[cfg(target_os = "macos")]
+pub fn screen_recording() -> Permission {
+    // No `unsafe` block, unlike `microphone` above: this is a plain C function rather
+    // than an Objective-C message send, and `objc2-core-graphics` binds it as safe. A
+    // pure query — no prompt, no side effects.
+    //
+    // Not deprecated, unlike most of CGWindow.h — the two image-creating functions there
+    // are marked obsoleted as of macOS 15 in favour of ScreenCaptureKit, but this one is
+    // plain `API_AVAILABLE(macos(10.15))`, comfortably below Magi's 11.0 minimum.
+    if objc2_core_graphics::CGPreflightScreenCaptureAccess() {
+        Permission::Granted
+    } else {
+        Permission::Denied
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn screen_recording() -> Permission {
+    Permission::NotApplicable
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reading_the_screen_recording_state_does_not_prompt_or_panic() {
+        // Same contract as the microphone: asking must be safe, cheap and silent. A query
+        // that prompted would hang a headless CI runner, and one that panicked would take
+        // a background tray app down at startup with nothing on screen to show why.
+        //
+        // The value is whatever this machine reports and is deliberately not asserted —
+        // a test that required the permission would be a test that requires a display.
+        let state = screen_recording();
+        assert!(matches!(
+            state,
+            Permission::Granted | Permission::Denied | Permission::NotApplicable
+        ));
+        assert!(
+            !matches!(state, Permission::NotAsked | Permission::Restricted),
+            "CGPreflightScreenCaptureAccess returns a bool; neither state is representable"
+        );
+    }
 
     #[test]
     fn reading_the_microphone_state_does_not_prompt_or_panic() {

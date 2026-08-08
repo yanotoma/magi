@@ -94,6 +94,18 @@ objc2-av-foundation = { version = "0.3", default-features = false, features = [
   "AVCaptureDevice",
   "AVMediaFormat",
 ] }
+# Reads screen-recording authorisation without prompting, via
+# CGPreflightScreenCaptureAccess. Already in Cargo.lock as a transitive dependency of
+# the objc2 family, so this makes an existing crate directly usable rather than adding
+# a new one to the tree.
+#
+# Note what is NOT used from it: CGWindowListCreateImage and
+# CGWindowListCreateImageFromArray carry `obsoleted=15.0` in the SDK header with the
+# message "Please use ScreenCaptureKit instead." The preflight and request functions
+# are plain `API_AVAILABLE(macos(10.15))` with no deprecation, so they are safe.
+objc2-core-graphics = { version = "0.3", default-features = false, features = [
+  "CGWindow",
+] }
 
 [dev-dependencies]
 # #[tokio::test] needs a runtime the library itself does not pull in.

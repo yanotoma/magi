@@ -2029,6 +2029,7 @@ dependencies = [
  "hound",
  "keyring",
  "objc2-av-foundation",
+ "objc2-core-graphics",
  "png 0.17.16",
  "reqwest 0.12.28",
  "serde",
