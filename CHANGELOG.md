@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.3.0-alpha.1] - 2026-08-08
+
 ### Added
 - **Speak any language.** Magi detects it by default — Spanish, Portuguese, Japanese, about ninety-nine of them — and transcribes in the language you spoke rather than translating. Settings → Voice can pin one if you always use the same
 - **Language shortlist.** If auto-detection gets a short utterance wrong — two seconds of Spanish came back as French at p=0.18 — you can tell Magi which languages you actually speak. Settings → Voice shows a checkbox list: leave it empty to detect from all ninety-nine, tick one to pin it, or tick a few to restrict detection to your choices
@@ -94,7 +96,8 @@ First build. The shell exists; there is nothing intelligent behind it yet.
 - Requires Accessibility permission for the global shortcut
 - Not signed or notarized — there is no downloadable build
 
-[Unreleased]: https://github.com/yanotoma/magi/compare/v0.2.0-alpha.2...HEAD
+[Unreleased]: https://github.com/yanotoma/magi/compare/v0.3.0-alpha.1...HEAD
+[0.3.0-alpha.1]: https://github.com/yanotoma/magi/compare/v0.2.0-alpha.2...v0.3.0-alpha.1
 [0.2.0-alpha.2]: https://github.com/yanotoma/magi/compare/v0.2.0-alpha.1...v0.2.0-alpha.2
 [0.2.0-alpha.1]: https://github.com/yanotoma/magi/compare/v0.1.0-alpha.1...v0.2.0-alpha.1
 [0.1.0-alpha.1]: https://github.com/yanotoma/magi/releases/tag/v0.1.0-alpha.1

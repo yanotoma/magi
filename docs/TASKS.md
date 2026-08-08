@@ -19,7 +19,7 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 | **M1** | Shell — tray, hotkey, windows | `0.1.0-alpha.1` | 15 | 16 | ✅ Shipped |
 | **M2** | Config & providers | `0.2.0-alpha.1` | 28 | 28 | ✅ Shipped |
 | **M3** | Pre-flight & capability tiers | `0.2.0-alpha.2` | 13 | 14 | ✅ Shipped |
-| **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 27 | 27 | 🔨 Code complete |
+| **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 27 | 27 | ✅ Shipped |
 | **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 0 | 13 | ⬜ |
 | **M6** | Session machine & panel UX | `0.5.0-beta.1` | 0 | 16 | ⬜ |
 | **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 14 | ⬜ |

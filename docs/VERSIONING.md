@@ -2,7 +2,7 @@
 
 Magi follows [Semantic Versioning 2.0.0](https://semver.org).
 
-**Current version:** `0.2.0-alpha.2` (tagged; no downloadable build until M7 adds signing)
+**Current version:** `0.3.0-alpha.1` (tagged; no downloadable build until M7 adds signing)
 
 ---
 
