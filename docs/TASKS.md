@@ -360,6 +360,28 @@ wins", and only the first of those would mean a user has to think about word ord
       detection means re-running detection per window and accepting that a segment
       boundary can land mid-sentence
 
+## Deferred: lowering the macOS floor back below 14
+
+Outside the summary table, same as the sections below it.
+
+**Decision — ScreenCaptureKit, and macOS 14 as the minimum.** The alternative was
+`CGWindowListCreateImage`, which covers macOS 11 and still runs today, but which returns a
+picture of an empty desktop rather than an error when Screen Recording permission is absent.
+A permission check before every capture closes that hole, so the choice was really about
+longevity: Apple marks that call `obsoleted=15.0` with "Please use ScreenCaptureKit
+instead", and building capture on it means rebuilding it later. ScreenCaptureKit itself
+starts at macOS 12.3, but its one-shot `SCScreenshotManager.captureImageWithFilter` — the
+only path that is a screenshot rather than a video stream stopped after one frame — starts
+at 14.0.
+
+Lowering the floor later only widens support; it can never strand someone who already runs
+Magi, which is why taking the simple path first is safe.
+
+- [ ] Capture on macOS 12.3 through 13 via `SCStream`, to lower the minimum from 14. Needs
+      an `SCStreamOutput` delegate implemented with `objc2`'s `define_class!`, a stream
+      started and stopped around a single frame, and a `CMSampleBuffer` converted to pixels
+      — considerably more machinery than the one-shot call, for two macOS versions
+
 ## Deferred: native audio input
 
 Outside the summary table on purpose: `tools/task_counts.py` only counts sections whose

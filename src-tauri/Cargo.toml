@@ -75,6 +75,7 @@ thiserror = "2"
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+objc2-screen-capture-kit = { version = "0.3.2", default-features = false, features = ["SCScreenshotManager", "SCShareableContent", "SCStream", "SCError", "block2", "std", "objc2-core-graphics", "objc2-core-media", "dispatch2"] }
 
 # Metal does not exist off macOS, so the acceleration feature is target-gated
 # rather than unconditional. Cargo unions features across these tables, so the

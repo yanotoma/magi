@@ -6,6 +6,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Changed
+- macOS 14 (Sonoma) is now the minimum, up from macOS 11. Screen capture uses ScreenCaptureKit, Apple's current API: the one it replaces returns a picture of an empty desktop when permission is missing rather than reporting an error, which would mean a model answering confidently about a screen it never saw. ScreenCaptureKit's one-shot screenshot call arrives in macOS 14. Supporting 12.3 and 13 is possible through a longer streaming path and may come later — that would only lower the floor, never raise it again
+
 ## [0.3.0-alpha.1] - 2026-08-08
 
 ### Added
