@@ -95,7 +95,11 @@ And `set_translate(false)`, always. Someone speaking Spanish wants Spanish text;
 
 `segment.no_speech_probability()` is whisper.cpp's own per-segment judgement that a passage is not speech. It is a far better silence filter than matching output against known hallucinations — numeric, from the model, and language-independent, where a string list is English-only and needs maintaining as the model changes.
 
-Keep a string list as a backstop for artefacts that arrive with a confident probability, but make this the primary signal. `params.set_no_speech_thold()` sets the threshold whisper.cpp itself uses; its default is `0.6`.
+**Hand the threshold to whisper.cpp and do not apply it again yourself.** `params.set_no_speech_thold()` sets the value, and whisper uses it *combined* with `logprob_thold` — discarding a segment only when both conditions hold. Vetoing segments whose `no_speech_probability` exceeds the same number is strictly harsher than whisper intends, and a short utterance carries a high no-speech probability even when it is plainly speech.
+
+Magi did exactly that and two seconds of Spanish came back as zero segments: the audio was captured, the language detected at 0.82 confidence, and every segment thrown away afterwards. The signal is good; second-guessing whisper's own use of it with a worse rule is not.
+
+**Log the raw segment count next to the kept one.** When they disagree, the audio reached the model and something after it discarded the answer — a different problem from the model hearing nothing, and the two are indistinguishable in a log that reports only one number. That gap is what made the bug above take a user report to find.
 
 Also worth setting: `set_suppress_blank(true)` and `set_suppress_nst(true)`, which stop the blank and non-speech tokens at the source instead of filtering them afterwards.
 

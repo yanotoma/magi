@@ -15,15 +15,25 @@ use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextPar
 
 use super::{SttError, Transcriber, Transcript};
 
-/// Below this, whisper.cpp's own judgement that a segment is not speech is trusted.
+/// The threshold whisper.cpp uses internally to decide a segment is silence.
 ///
-/// The model reports a no-speech probability per segment, which is a far better
-/// signal than matching its output against a list of known hallucinations: it is
-/// numeric, it comes from the model, and it does not depend on the language. The
-/// string list in [`super`] stays as a backstop for the cases that slip through with
-/// a confident-looking probability.
+/// Passed to `set_no_speech_thold` and **not** applied again to the output, which is a
+/// correction. The first version of this vetoed any segment whose
+/// `no_speech_probability` exceeded this value, and that dropped real speech: whisper.cpp
+/// uses the number *combined* with `logprob_thold`, discarding a segment only when both
+/// conditions hold. Applying it alone is strictly more aggressive than whisper intends,
+/// and a short utterance carries a high no-speech probability even when it is plainly
+/// speech — two seconds of Spanish came back as zero segments.
 ///
-/// 0.6 is whisper.cpp's own default for `no_speech_thold`.
+/// The signal is good; second-guessing whisper's own use of it with a worse rule was not.
+/// It decides, and [`super::Transcript::is_meaningful`] catches what gets through.
+///
+/// 0.6 is whisper.cpp's own default.
+///
+/// There is deliberately no test asserting the veto is absent. The first attempt scanned
+/// this file for the method name and matched the phrase inside its own assertion message —
+/// a self-referential check that passed or failed for reasons unrelated to the code. Some
+/// things are a review's job rather than a test's.
 const NO_SPEECH_THRESHOLD: f32 = 0.6;
 
 /// How many threads inference may use.
@@ -203,20 +213,14 @@ impl Transcriber for WhisperTranscriber {
         // whole transcription on one invalid byte, and losing a sentence to a
         // replacement character is the wrong trade.
         let mut text = String::new();
-        let mut spoken_segments = 0usize;
+        let mut kept = 0usize;
+        // Counted separately so a lost transcript is diagnosable. When these disagree, the
+        // audio reached the model and something here threw the answer away — which is a
+        // different problem from the model hearing nothing, and the two were
+        // indistinguishable in the log while a filter was silently eating every segment.
+        let raw_segments = state.full_n_segments();
 
         for segment in state.as_iter() {
-            // The model's own judgement, per segment, that this is not speech. A
-            // better signal than matching the output against known hallucinations:
-            // numeric, from the model, and language-independent.
-            if segment.no_speech_probability() > NO_SPEECH_THRESHOLD {
-                tracing::debug!(
-                    probability = segment.no_speech_probability(),
-                    "dropping a segment the model considers silence"
-                );
-                continue;
-            }
-
             let Ok(chunk) = segment.to_str_lossy() else {
                 continue;
             };
@@ -230,12 +234,14 @@ impl Transcriber for WhisperTranscriber {
                 text.push(' ');
             }
             text.push_str(chunk);
-            spoken_segments += 1;
+            kept += 1;
         }
 
         tracing::info!(
             seconds = samples.len() as f32 / super::REQUIRED_RATE as f32,
-            segments = spoken_segments,
+            raw_segments,
+            kept,
+            characters = text.len(),
             "transcribed"
         );
 
@@ -310,8 +316,8 @@ mod tests {
 
     #[test]
     fn the_no_speech_threshold_matches_whisper_cpps_own_default() {
-        // Not a number picked here. Diverging from upstream's default would need a
-        // reason, and there is none yet.
+        // Not a number picked here. Diverging from upstream's default would need a reason,
+        // and there is none yet.
         assert!((NO_SPEECH_THRESHOLD - 0.6).abs() < f32::EPSILON);
     }
 
