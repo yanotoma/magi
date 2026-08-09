@@ -67,6 +67,52 @@ to **the current process is capturable without TCC consent**. A developer who te
 against Magi's own panel window will see it work perfectly and never discover the
 permission problem.
 
+## `tauri dev` cannot hold this permission at all
+
+Measured, after Magi failed to appear in System Settings at all.
+
+`npm run tauri dev` runs a bare Mach-O with no bundle:
+
+```
+Executable=.../target/debug/magi
+Identifier=magi-c8c1c0812cc6eba8
+Signature=adhoc, linker-signed
+Info.plist=not bound
+```
+
+TCC identifies applications by their **code signature**, and that identifier is derived from
+the binary's contents. Every `cargo build` produces a different one, so from TCC's point of
+view each compile is a different anonymous executable. There is also no bound `Info.plist`,
+so macOS has no name to list it under.
+
+This is the same mechanism as the keychain problem in `CLAUDE.md` — *"the ACL is tied to the
+binary's signature and `cargo` produces a new binary on each compile"* — and it was written
+down there for the keychain without anyone noticing it applies to every TCC permission
+equally.
+
+**`tauri build` alone does not fix it.** The bundle it produces keeps the copied binary's
+linker-signed identity and leaves the plist unbound:
+
+```
+Identifier=magi-6610ce2c77f94cc5   ← not dev.magi.app
+Info.plist=not bound
+```
+
+An explicit `codesign` pass is what makes the identity stable and binds the plist:
+
+```sh
+codesign --force --deep --sign - --identifier dev.magi.app Magi.app
+# Identifier=dev.magi.app
+# Info.plist entries=15
+```
+
+`tools/dev-bundle.sh` does the build and the signing together. Ad-hoc signing is enough for
+macOS to name the app; it is not enough to distribute, and it does not promise a grant
+survives a rebuild — real signing is M7.
+
+**Practical consequence: never debug a permission problem from `tauri dev`.** The symptom
+there is indistinguishable from a bug in the permission code.
+
 ## Screen Recording permission has only two states
 
 Unlike the microphone. `CGPreflightScreenCaptureAccess` returns a bare `bool`, and there is
@@ -209,3 +255,5 @@ check passes and the encoder reads past the end.
 - [ ] Enumeration and capture sit behind a trait with a fake, and no test needs a display
 - [ ] Capture was tested against another application's window, not only Magi's own — the
       app's own windows need no permission and will pass regardless
+- [ ] Any permission problem was reproduced from a signed `.app` (`tools/dev-bundle.sh`),
+      never from `tauri dev`, whose unbundled binary cannot hold a TCC grant at all
