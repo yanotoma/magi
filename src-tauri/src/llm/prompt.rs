@@ -62,12 +62,46 @@ You cannot see the user's screen and have no way to look at it. If a question \
 depends on what is displayed, say so plainly and ask them to paste the relevant \
 text or error message.";
 
+/// Whether Magi can actually perform a capture during a turn yet.
+///
+/// **False, and that is the honest state.** `capture::ScreenCaptureKit` works and
+/// Settings can take a test screenshot with it, but nothing connects a *turn* to
+/// it: `TurnRequest` carries no tool definitions, `StreamEvent` has no variant for
+/// a tool call, and there is no loop to run one. Those are M5's remaining tasks.
+///
+/// Until then the prompt must not say otherwise, and this flag is why. Told it can
+/// call `capture_screen`, a Tier 1 model tries, receives nothing, and **invents the
+/// screenshot** — observed verbatim in its own reasoning:
+///
+/// ```text
+/// [Capture_screen tool called. Assuming the screenshot shows a word processor
+///  like Microsoft Word or Google Docs.]
+/// Tu programa abierto es un procesador de texto, como Microsoft Word.
+/// ```
+///
+/// The user had a terminal open. That is the exact failure the whole agentic-vision
+/// design exists to prevent — the design doc's "a model that assumes it can already
+/// see will answer confidently about a screen it never looked at" — and promising a
+/// capability the code does not deliver is how Magi caused it rather than avoided it.
+///
+/// Flip this to `true` in the same commit that lands the tool-call loop. The
+/// per-tier clauses below are already correct and tested for that day.
+const CAPTURE_IS_WIRED: bool = false;
+
 /// The capture clause for a tier.
 ///
 /// [`Tier::Unreachable`] gets the tier 3 clause. Nothing is known about an
 /// unreachable model, and the safe assumption is the one that cannot lead the
 /// model to promise something it cannot do.
+///
+/// Every tier gets that same clause while [`CAPTURE_IS_WIRED`] is false. A model's
+/// tier says what the *model* can do; this says what *Magi* can do with it, and the
+/// prompt has to reflect the smaller of the two.
 fn capture_clause(tier: Tier) -> &'static str {
+    if !CAPTURE_IS_WIRED {
+        return NO_CAPTURE;
+    }
+
     match tier {
         Tier::Agentic => AGENTIC_CAPTURE,
         Tier::Heuristic => HEURISTIC_CAPTURE,
@@ -122,19 +156,38 @@ mod tests {
     }
 
     #[test]
-    fn only_the_agentic_tier_names_the_tool() {
-        // The load-bearing assertion of this module. Naming a tool to tier 2 makes
-        // it write malformed tool syntax into prose; naming it to tier 3 makes a
-        // blind model offer to look at the screen.
+    fn no_tier_promises_capture_while_it_is_unwired() {
+        // The assertion that matters *today*. A Tier 1 model told it can call
+        // `capture_screen` when nothing executes the call does not fail — it invents
+        // the screenshot and answers confidently about a screen it never saw. That
+        // happened, and this is the guard against it happening again.
+        // No assertion on `CAPTURE_IS_WIRED` itself — that would be a constant, and
+        // clippy is right that it proves nothing. This test announces its own
+        // obsolescence instead: flip the flag and it fails here, on the tier that has
+        // just been given the tool, which is exactly when it should be deleted.
         for tier in EVERY_TIER {
             let prompt = system_prompt(tier, "");
-            let names_tool = prompt.contains("capture_screen");
-            assert_eq!(
-                names_tool,
-                tier == Tier::Agentic,
-                "{tier:?} mentions capture_screen: {names_tool}, which is wrong"
+            assert!(
+                !prompt.contains("capture_screen"),
+                "{tier:?} promises a tool nothing can execute"
+            );
+            assert!(
+                prompt.contains("cannot see"),
+                "{tier:?} does not say plainly that it cannot see the screen"
             );
         }
+    }
+
+    #[test]
+    fn only_the_agentic_clause_names_the_tool() {
+        // The load-bearing assertion of this module, checked against the clauses
+        // themselves rather than the assembled prompt, so it keeps guarding the
+        // wording while `CAPTURE_IS_WIRED` is false. Naming a tool to tier 2 makes it
+        // write malformed tool syntax into prose; naming it to tier 3 makes a blind
+        // model offer to look at the screen.
+        assert!(AGENTIC_CAPTURE.contains("capture_screen"));
+        assert!(!HEURISTIC_CAPTURE.contains("capture_screen"));
+        assert!(!NO_CAPTURE.contains("capture_screen"));
     }
 
     #[test]
@@ -142,7 +195,7 @@ mod tests {
         // Stronger than the assertion above: not the tool's name, not the word
         // "tool", not "call". The concept has to be absent, because a model that
         // malforms tool calls will reach for the syntax if the idea is introduced.
-        let prompt = system_prompt(Tier::Heuristic, "");
+        let prompt = HEURISTIC_CAPTURE;
         for forbidden in ["tool", "Tool", "call it", "calling"] {
             assert!(
                 !prompt.contains(forbidden),
@@ -156,9 +209,8 @@ mod tests {
     fn the_heuristic_tier_still_expects_an_image() {
         // It must know an attached screenshot is to be used, since Magi attaches
         // one without being asked.
-        let prompt = system_prompt(Tier::Heuristic, "");
-        assert!(prompt.contains("screenshot"));
-        assert!(prompt.contains("attached"));
+        assert!(HEURISTIC_CAPTURE.contains("screenshot"));
+        assert!(HEURISTIC_CAPTURE.contains("attached"));
     }
 
     #[test]
@@ -239,10 +291,7 @@ mod tests {
         // They both send images, which makes it tempting to share one prompt. They
         // must not: the difference in tool wording is the whole reason the tiers
         // are separate.
-        assert_ne!(
-            system_prompt(Tier::Agentic, ""),
-            system_prompt(Tier::Heuristic, "")
-        );
+        assert_ne!(AGENTIC_CAPTURE, HEURISTIC_CAPTURE);
     }
 
     #[test]
@@ -250,11 +299,10 @@ mod tests {
         // Describing the screenshot back is the most common failure with a vision
         // model in this shape of app: the user is looking at the screen already,
         // so a description is pure noise ahead of the answer.
-        for tier in [Tier::Agentic, Tier::Heuristic] {
+        for clause in [AGENTIC_CAPTURE, HEURISTIC_CAPTURE] {
             assert!(
-                system_prompt(tier, "").contains("do not describe")
-                    || system_prompt(tier, "").contains("Never describe"),
-                "{tier:?} must tell the model not to narrate what it sees"
+                clause.contains("do not describe") || clause.contains("Never describe"),
+                "a vision clause must tell the model not to narrate what it sees: {clause}"
             );
         }
     }
