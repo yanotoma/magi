@@ -2,24 +2,23 @@
 #
 # Builds a runnable Magi.app for testing the permissions that only work from a bundle.
 #
-# `npm run tauri dev` runs a bare Mach-O with no bundle: no Info.plist bound, and a
-# linker-signed identity derived from the binary's hash. macOS TCC identifies applications
-# by their code signature, so from its point of view that binary is an anonymous executable
-# with a different name after every compile — which is why Magi never appears in System
-# Settings › Privacy & Security when run with `tauri dev`, and why granting a permission to
-# it would not survive the next `cargo build`.
+# macOS TCC attributes a permission request to the *responsible process* — the nearest
+# ancestor in the process tree with a bundle identifier — and not to the process that asked.
+# So `magi` started by a dev server registers the dev server, and `magi` started from a
+# terminal registers the terminal. Magi itself never gets a row, and if the parent already
+# holds the permission then capture works while belonging to something else entirely.
 #
-# Exactly the same mechanism as the keychain problem in CLAUDE.md, which is worth noticing:
-# a permission keyed to a code signature breaks on every rebuild, whether that permission is
-# a keychain ACL or Screen Recording.
+# A bundle launched standalone has no such ancestor, so it becomes its own responsible
+# process and TCC uses its CFBundleIdentifier. That is the only arrangement in which Magi
+# appears under its own name — which is why this script exists and why the steps below insist
+# on `open`ing the app rather than running the binary.
 #
-# `tauri build` produces a bundle but does *not* re-sign it — the copied binary keeps its
-# linker-signed identity and the Info.plist stays unbound. The `codesign` pass below is what
-# makes the identity `dev.magi.app` and binds the plist, which is what lets macOS list the
-# app under its own name.
+# `tauri build` produces a bundle but does not re-sign it: the copied binary keeps its
+# linker-signed, hash-shaped identifier and the Info.plist stays unbound, leaving macOS with
+# no name to display. The `codesign` pass below fixes that.
 #
-# Ad-hoc, not Developer ID. That is enough for TCC to name the app; it is not enough to
-# distribute, and it does not promise that a grant survives a rebuild. Real signing is M7.
+# Ad-hoc, not Developer ID. Enough for macOS to name the app, not enough to distribute.
+# Real signing is M7.
 
 set -euo pipefail
 

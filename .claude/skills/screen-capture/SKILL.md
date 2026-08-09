@@ -67,51 +67,63 @@ to **the current process is capturable without TCC consent**. A developer who te
 against Magi's own panel window will see it work perfectly and never discover the
 permission problem.
 
-## `tauri dev` cannot hold this permission at all
+## The permission belongs to whatever launched Magi, not to Magi
 
-Measured, after Magi failed to appear in System Settings at all.
+Measured, after Magi failed to appear in System Settings at all — and after a first
+explanation that was wrong in a way worth recording, because it was built out of true facts.
 
-`npm run tauri dev` runs a bare Mach-O with no bundle:
-
-```
-Executable=.../target/debug/magi
-Identifier=magi-c8c1c0812cc6eba8
-Signature=adhoc, linker-signed
-Info.plist=not bound
-```
-
-TCC identifies applications by their **code signature**, and that identifier is derived from
-the binary's contents. Every `cargo build` produces a different one, so from TCC's point of
-view each compile is a different anonymous executable. There is also no bound `Info.plist`,
-so macOS has no name to list it under.
-
-This is the same mechanism as the keychain problem in `CLAUDE.md` — *"the ACL is tied to the
-binary's signature and `cargo` produces a new binary on each compile"* — and it was written
-down there for the keychain without anyone noticing it applies to every TCC permission
-equally.
-
-**`tauri build` alone does not fix it.** The bundle it produces keeps the copied binary's
-linker-signed identity and leaves the plist unbound:
+**The real mechanism: TCC attributes a request to the *responsible process*, not the
+requesting one.** The responsible process is the nearest ancestor in the process tree that
+has a bundle identifier. From the TCC log of a bare binary calling
+`CGRequestScreenCaptureAccess`:
 
 ```
-Identifier=magi-6610ce2c77f94cc5   ← not dev.magi.app
-Info.plist=not bound
+AttributionChain:
+  responsible={TCCDProcess: identifier=com.anthropic.claude-code, ...}
+  requesting={TCCDProcess: identifier=tcctest-ebc5054466778434, ...}
+
+Auth Right: Unknown (None), DB Action:None
+Service kTCCServiceScreenCapture does not allow prompting; returning denied.
+Update Access Record: kTCCServiceScreenCapture for com.anthropic.claude-code to Denied
 ```
 
-An explicit `codesign` pass is what makes the identity stable and binds the plist:
+The record is written for the **parent**. The requesting binary gets no entry of its own,
+ever. So:
 
-```sh
-codesign --force --deep --sign - --identifier dev.magi.app Magi.app
-# Identifier=dev.magi.app
-# Info.plist entries=15
-```
+- `magi` launched from Terminal → the request belongs to **Terminal**.
+- `magi` launched by a development tool → the request belongs to **that tool**.
+- If the parent already holds the permission, `CGPreflightScreenCaptureAccess` returns
+  `true` and capture works — while Magi still has no row anywhere. That is the confusing
+  case: it works, and it is not Magi's permission.
 
-`tools/dev-bundle.sh` does the build and the signing together. Ad-hoc signing is enough for
-macOS to name the app; it is not enough to distribute, and it does not promise a grant
-survives a rebuild — real signing is M7.
+Launched **standalone** — double-clicked, `open`ed, or started by `launchd` — a bundle has no
+ancestor with a bundle identifier, so it becomes its own responsible process and TCC uses its
+`CFBundleIdentifier`. That is the only arrangement in which Magi gets its own row.
 
-**Practical consequence: never debug a permission problem from `tauri dev`.** The symptom
-there is indistinguishable from a bug in the permission code.
+**So test from a bundle you launch yourself, not from a dev-server child process.**
+`tools/dev-bundle.sh` builds and signs one. The signing matters for a smaller reason than
+first assumed: `tauri build` leaves the copied binary linker-signed with a hash-shaped
+identifier and the `Info.plist` unbound, so `codesign --identifier dev.magi.app` is what
+gives macOS the name to display.
+
+### Two things that turned out not to be true
+
+Recorded because both are plausible, both were written down here as fact, and both are wrong.
+
+**"Each rebuild is a new identity, so a grant cannot survive `cargo build`."** It is not.
+For a linker-signed ad-hoc binary the identifier is derived from the output *path and file
+name*, not from content: after a real code change the `LC_UUID` moved from
+`AB630833-…` to `24D71233-…` while the identifier stayed `tcctest-ebc5054466778434`. This
+is not the keychain situation, however much it resembles it.
+
+**"An unbundled binary cannot be listed by TCC at all."** Not the reason either. Bundling
+changes nothing on its own — a hand-made `.app` with a proper `CFBundleIdentifier`, launched
+as a child process, produced exactly the same `DB Action:None`. What matters is the
+responsible-process chain, not the bundle.
+
+The lesson is the shape of the mistake, not the details: every fact in the first explanation
+was verified, and the causal claim built from them was never tested. **Verify the cause, not
+only the ingredients.**
 
 ## Screen Recording permission has only two states
 
@@ -255,5 +267,8 @@ check passes and the encoder reads past the end.
 - [ ] Enumeration and capture sit behind a trait with a fake, and no test needs a display
 - [ ] Capture was tested against another application's window, not only Magi's own — the
       app's own windows need no permission and will pass regardless
-- [ ] Any permission problem was reproduced from a signed `.app` (`tools/dev-bundle.sh`),
-      never from `tauri dev`, whose unbundled binary cannot hold a TCC grant at all
+- [ ] Any permission problem was reproduced from a `.app` launched standalone
+      (`tools/dev-bundle.sh`, then `open` it), never from a dev-server child process whose
+      TCC request belongs to its parent
+- [ ] `CGPreflightScreenCaptureAccess` returning `true` was not taken as proof that *Magi*
+      holds the permission — under a parent that holds it, so does everything it launches
