@@ -925,11 +925,16 @@
           running app does not take effect until it is reopened — so trying it once is the
           only honest way to know it works.
         -->
-        {#if capture.screen_recording === "granted"}
-          <button type="button" onclick={() => runCapture(testCapture)}>
-            Take a test screenshot
-          </button>
-        {/if}
+        <!--
+          Always offered, never gated on the permission badge. The badge comes from
+          `CGPreflightScreenCaptureAccess`, and hiding the button when that says no was
+          observed to lock the user out while the permission was granted in System
+          Settings: the only thing that can settle the disagreement is asking
+          ScreenCaptureKit, and this button is how you ask.
+        -->
+        <button type="button" onclick={() => runCapture(testCapture)}>
+          Take a test screenshot
+        </button>
 
         {#if capture.entries.length === 0}
           <p class="empty">Magi has not read your screen.</p>

@@ -80,20 +80,32 @@ impl Default for ScreenCaptureKit {
 
 /// Everything ScreenCaptureKit is willing to show us.
 ///
+/// Also the permission check: a denial arrives here as `SCStreamErrorCode::UserDeclined`,
+/// which is authoritative in a way no separate preflight call is.
+///
 /// Bridges one async call to a blocking one. Safe here specifically because the completion
 /// handler runs on a queue of the framework's choosing rather than on the caller's thread —
 /// blocking a `spawn_blocking` worker cannot starve the handler that would release it. It
 /// would deadlock on the main thread, which is why every caller goes through
 /// `spawn_blocking`.
 fn shareable_content() -> Result<Retained<SCShareableContent>, CaptureError> {
-    // Refuse before asking. Without permission, ScreenCaptureKit reports
-    // `SCStreamErrorCode::UserDeclined` and does the right thing — but on a first run it
-    // also has nothing to report until the user has been sent to System Settings, and this
-    // way the error names the fix rather than the symptom.
-    if !crate::permissions::screen_recording().is_usable() {
-        return Err(CaptureError::PermissionDenied);
-    }
-
+    // **No preflight gate here, deliberately.** An earlier version refused up front when
+    // `CGPreflightScreenCaptureAccess` said no, on the reasoning that naming the fix beats
+    // reporting the symptom. That was a mistake in two ways.
+    //
+    // It asks the wrong oracle: the authority on whether ScreenCaptureKit can capture is
+    // ScreenCaptureKit, which reports `SCStreamErrorCode::UserDeclined` properly — unlike
+    // the CGWindow API it replaced, whose silent degradation is the only reason a preflight
+    // guard looked necessary at all. Consulting a different framework's opinion adds a way
+    // to fail without adding any safety.
+    //
+    // And it turns a disagreement into a wall. Observed: permission granted in System
+    // Settings, the app relaunched twice, and the preflight call still saying no — with the
+    // gate in place, capture was impossible even if the permission was genuinely there,
+    // and no error could distinguish "macOS refused" from "Magi refused on macOS's behalf".
+    //
+    // `permissions::screen_recording()` still drives what Settings *shows*. It just no
+    // longer gets a veto over what is *attempted*.
     let (sender, receiver) = mpsc::channel();
 
     // `*mut` in, owned out. The handler is called on a framework queue, so the values have

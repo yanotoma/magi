@@ -46,11 +46,28 @@ OUTPUT_DIR = Path(__file__).resolve().parent.parent / "src-tauri" / "icons"
 # "follows the theme" is not available here — unlike every surface inside the
 # app, where `Canvas` and `CanvasText` do the work.
 #
-# Dark ground with a warm mark, which is the MAGI of the source material: amber
-# text on a black terminal. It also happens to be the highest-contrast pairing
-# available, which is what survives being drawn at sixteen pixels.
-BACKGROUND = (0x1A, 0x1D, 0x24)
-NODE = (0xFF, 0xA5, 0x2B)
+# Straight from the MAGI display in the source material: three bright green units
+# on black, linked in orange, captioned MAGI. Melchior, Balthasar and Casper are
+# where the three-node mark comes from in the first place, so taking the palette
+# from the same frame is not a decoration choice so much as finishing the quotation.
+#
+# The green is also the better call at sixteen pixels than the amber it replaces:
+# it sits further from the warm greys and browns of most app icons, so the mark is
+# distinguishable in a Dock at a glance rather than only when looked at.
+BACKGROUND = (0x0D, 0x0F, 0x12)
+NODE = (0x5C, 0xF0, 0xA0)
+
+# The orange that links the three units on that display. `None` draws none, which
+# is one edit away if the links are ever unwanted.
+#
+# Kept, after rendering both at 16, 24, 32 and 64 pixels and comparing. Three linked
+# nodes read as a system of three cooperating machines — which is what MAGI is —
+# while three loose dots read as a dice face. The objection was that a two-pixel
+# line would be a smudge at sixteen pixels, and that turned out to be wrong: the
+# links are still legible there, and they are what makes the mark identifiable at
+# the size where identifiability matters most.
+LINK: tuple[int, int, int] | None = (0xE8, 0x54, 0x1E)
+LINK_WIDTH = 0.030
 
 # Fractions of the canvas, so every size is the same drawing rather than a
 # resize. A 16px icon rendered directly is legible; a 1024px icon scaled down to
@@ -155,12 +172,42 @@ def sample(x: float, y: float, size: int) -> tuple[int, int, int, int] | None:
     if not inside_squircle(x, y, size):
         return None
 
+    centres = node_centres(size)
+
     node_radius = NODE_RADIUS * size
-    for cx, cy in node_centres(size):
+    for cx, cy in centres:
         if math.hypot(x - cx, y - cy) <= node_radius:
             return (*NODE, 255)
 
+    if LINK is not None:
+        half_width = LINK_WIDTH * size / 2
+        for index, start in enumerate(centres):
+            end = centres[(index + 1) % len(centres)]
+            if distance_to_segment(x, y, start, end) <= half_width:
+                return (*LINK, 255)
+
     return (*BACKGROUND, 255)
+
+
+def distance_to_segment(
+    x: float,
+    y: float,
+    start: tuple[float, float],
+    end: tuple[float, float],
+) -> float:
+    """Shortest distance from a point to a line segment.
+
+    Clamped to the segment rather than the infinite line, so a link stops at the
+    node it joins instead of continuing past it to the canvas edge.
+    """
+    (x1, y1), (x2, y2) = start, end
+    dx, dy = x2 - x1, y2 - y1
+    length_squared = dx * dx + dy * dy
+    if length_squared == 0:
+        return math.hypot(x - x1, y - y1)
+
+    along = max(0.0, min(1.0, ((x - x1) * dx + (y - y1) * dy) / length_squared))
+    return math.hypot(x - (x1 + along * dx), y - (y1 + along * dy))
 
 
 def render(size: int) -> bytes:
