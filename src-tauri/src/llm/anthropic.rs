@@ -126,17 +126,17 @@ fn wire_message(message: &Message) -> serde_json::Value {
         Message::ToolResult {
             call_id,
             text,
-            image,
+            images,
         } => {
             // A `user` message, which reads oddly and is what the API wants: the result
             // is the user's side of the exchange even though no person wrote it.
-            let mut inner = Vec::with_capacity(2);
+            let mut inner = Vec::with_capacity(images.len() + 1);
             if !text.is_empty() {
                 inner.push(json!({ "type": "text", "text": text }));
             }
-            if let Some(image) = image {
-                // Inside the tool result, unlike the OpenAI family, where the image has
-                // to follow as a separate user message.
+            // Inside the tool result, unlike the OpenAI family, where the images have to
+            // follow as a separate user message.
+            for image in images {
                 inner.push(image_block(image));
             }
 
@@ -675,7 +675,7 @@ mod tests {
         let body = build_request(&with_messages(vec![Message::ToolResult {
             call_id: "call_1".to_string(),
             text: "Screenshot captured.".to_string(),
-            image: Some(a_screenshot()),
+            images: vec![a_screenshot()],
         }]));
 
         let messages = body["messages"].as_array().expect("array");

@@ -330,8 +330,14 @@ fn describe_display(display: &SCDisplay, primary: u32) -> DisplayInfo {
         )
     };
 
+    // The frame is in points, in the desktop's shared space — which is what makes
+    // "which display is this window on" answerable with three monitors attached.
+    let frame = unsafe { display.frame() };
+
     DisplayInfo {
         id,
+        x: frame.origin.x as i32,
+        y: frame.origin.y as i32,
         // ScreenCaptureKit exposes no display name, and `NSScreen.localizedName` is
         // main-thread only — calling it from here would be unsound. A number the user can
         // match to the order in System Settings beats a name obtained unsoundly.
@@ -374,8 +380,13 @@ impl ScreenCapture for ScreenCaptureKit {
             .iter()
             .filter(|window| unsafe { window.isOnScreen() })
             .map(|window| unsafe {
+                let frame = window.frame();
                 WindowInfo {
                     id: window.windowID(),
+                    x: frame.origin.x as i32,
+                    y: frame.origin.y as i32,
+                    width: frame.size.width.max(0.0) as u32,
+                    height: frame.size.height.max(0.0) as u32,
                     // Empty is not necessarily a bug: macOS withholds other applications'
                     // titles when Screen Recording is absent. `WindowInfo::title` says so.
                     title: window

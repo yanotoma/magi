@@ -1053,7 +1053,7 @@ async fn answer_call(
     let refuse = |text: String| Message::ToolResult {
         call_id: call.id.clone(),
         text,
-        image: None,
+        images: Vec::new(),
     };
 
     if call.name != crate::llm::tools::CAPTURE_SCREEN {
@@ -1074,17 +1074,35 @@ async fn answer_call(
     budget.spend();
 
     let reason = crate::llm::tools::Reason::from_tool_arguments(&call.arguments);
+    let target = crate::llm::tools::Target::from_tool_arguments(&call.arguments);
 
     // `spawn_blocking`, because a capture is a synchronous round trip through the window
     // server. Holding a runtime worker for it starves everything else that runtime polls.
     let screen = Arc::clone(&app.state::<AppState>().screen);
-    let captured = tauri::async_runtime::spawn_blocking(move || screen.capture_active_display())
-        .await
-        .map_err(|error| error.to_string())
-        .and_then(|result| result.map_err(|error| error.to_string()));
+    let gathered = tauri::async_runtime::spawn_blocking(move || {
+        use crate::llm::tools::Target;
 
-    let capture = match captured {
-        Ok(capture) => capture,
+        // The window list travels as text alongside the picture, and for some questions it
+        // *is* the answer. Asked what applications were open, a model was seen reading
+        // blurry pixels to recover names that were available exactly as strings — no
+        // resolution beats sending "Activity Monitor" as text. Cheap, precise, and it
+        // complements the image rather than competing with it.
+        let windows = screen.windows().unwrap_or_default();
+
+        let captures = match target {
+            Target::FocusedWindow => screen.capture_focused_window().map(|one| vec![one]),
+            Target::ActiveScreen => screen.capture_active_display().map(|one| vec![one]),
+            Target::AllScreens => screen.capture_all_displays(),
+        };
+
+        captures.map(|captures| (captures, windows))
+    })
+    .await
+    .map_err(|error| error.to_string())
+    .and_then(|result| result.map_err(|error| error.to_string()));
+
+    let (captures, windows) = match gathered {
+        Ok(gathered) => gathered,
         Err(message) => {
             tracing::warn!(%message, "the capture the model asked for failed");
             // The model is told, in words it can act on. A permission problem is the
@@ -1095,30 +1113,61 @@ async fn answer_call(
     };
 
     let state = app.state::<AppState>();
-    state.capture_log.record(crate::capture::Entry {
-        at: unix_millis(),
-        subject: capture.subject.clone(),
-        reason,
-        width: capture.width,
-        height: capture.height,
-        visual_tokens: capture.visual_tokens(),
-    });
+    for capture in &captures {
+        state.capture_log.record(crate::capture::Entry {
+            at: unix_millis(),
+            subject: capture.subject.clone(),
+            reason: reason.clone(),
+            width: capture.width,
+            height: capture.height,
+            visual_tokens: capture.visual_tokens(),
+        });
+    }
 
-    // The panel shows that the screen was read. Emitted after the log entry exists, so
+    // The panel shows that the screen was read. Emitted after the log entries exist, so
     // opening Settings the moment the indicator appears never shows an empty list.
-    if let Err(error) = app.emit("magi://captured", capture.subject.describe()) {
+    let announcement = captures
+        .iter()
+        .map(|capture| capture.subject.describe())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if let Err(error) = app.emit("magi://captured", announcement.clone()) {
         tracing::warn!(%error, "could not announce the capture");
+    }
+
+    // Named windows, frontmost first, so "what have I got open" is answered from strings
+    // rather than from pixels. Capped because a busy desktop has dozens and the tail is
+    // background noise nobody asked about.
+    let listed = windows
+        .iter()
+        .take(20)
+        .map(|window| {
+            if window.title.is_empty() {
+                window.app.clone()
+            } else {
+                format!("{} — {}", window.app, window.title)
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mut text = format!("Screenshot of {announcement}.");
+    if !listed.is_empty() {
+        text.push_str("\n\nOpen windows, frontmost first:\n");
+        text.push_str(&listed.join("\n"));
     }
 
     Message::ToolResult {
         call_id: call.id.clone(),
-        // Short and factual. The model has the image; a description of it here would
+        // Short and factual about the image. The model has it; describing it here would
         // compete with what it can see for itself.
-        text: format!("Screenshot of {}.", capture.subject.describe()),
-        image: Some(crate::llm::provider::Image {
-            media_type: "image/png",
-            bytes: capture.png,
-        }),
+        text,
+        images: captures
+            .into_iter()
+            .map(|capture| crate::llm::provider::Image {
+                media_type: "image/png",
+                bytes: capture.png,
+            })
+            .collect(),
     }
 }
 

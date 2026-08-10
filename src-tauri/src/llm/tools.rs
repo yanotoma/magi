@@ -42,11 +42,26 @@ pub fn capture_screen() -> ToolSpec {
                       Call it whenever answering depends on what is currently displayed — \
                       for example when the user refers to something as \"this\" or \"here\", \
                       asks about an error, a message, a window, or anything on screen, or \
-                      when you would otherwise have to guess what they are looking at."
+                      when you would otherwise have to guess what they are looking at. \
+                      Choose `focused_window` unless you need the whole display — a window \
+                      is photographed at far higher resolution for the same cost, and small \
+                      text is often unreadable in a full-screen shot."
             .to_string(),
         parameters: serde_json::json!({
             "type": "object",
             "properties": {
+                "target": {
+                    "type": "string",
+                    "enum": ["focused_window", "active_screen", "all_screens"],
+                    "description":
+                        "What to photograph. `focused_window` is the window in front and \
+                         is much sharper — prefer it whenever the question is about one \
+                         application, an error, or something you need to read. \
+                         `active_screen` is the whole display being used, for questions \
+                         about layout or about what is on screen. `all_screens` covers \
+                         every monitor and costs proportionally more; ask for it only when \
+                         the question genuinely spans them."
+                },
                 "reason": {
                     "type": "string",
                     "description":
@@ -54,12 +69,48 @@ pub fn capture_screen() -> ToolSpec {
                          capture log so they can see why their screen was read."
                 }
             },
-            "required": ["reason"],
+            "required": ["target", "reason"],
             // Both families accept this and some validate against it. Set explicitly
             // rather than left out, so a model cannot invent a second argument that then
             // has to be ignored somewhere downstream.
             "additionalProperties": false
         }),
+    }
+}
+
+/// What the model asked to have photographed.
+///
+/// Three values rather than a display id or a window id, and that is the point: the model
+/// has no way to know what monitors exist or what window is in front, so asking it to name
+/// one would mean either a wasted round trip to enumerate them or a confident guess. These
+/// three are all answerable from where the user's attention is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Target {
+    /// The window in front. Sharpest, and the right answer for most questions.
+    #[default]
+    FocusedWindow,
+
+    /// The whole display holding that window — not the primary one, which is a different
+    /// screen entirely on a desk with three monitors.
+    ActiveScreen,
+
+    /// Every display, one image each.
+    AllScreens,
+}
+
+impl Target {
+    /// Reads a target out of a tool call's arguments.
+    ///
+    /// Defaults to [`Target::FocusedWindow`] for anything unrecognised, including a missing
+    /// field. Tolerant for the same reason as [`Reason::from_tool_arguments`]: the model
+    /// asked to look, and refusing over a malformed enum would cost the user their answer.
+    /// The default is also the cheapest and sharpest, so guessing it is not a penalty.
+    pub fn from_tool_arguments(arguments: &serde_json::Value) -> Self {
+        match arguments.get("target").and_then(serde_json::Value::as_str) {
+            Some("active_screen") => Target::ActiveScreen,
+            Some("all_screens") => Target::AllScreens,
+            _ => Target::FocusedWindow,
+        }
     }
 }
 
@@ -196,6 +247,54 @@ mod tests {
     }
 
     #[test]
+    fn the_target_defaults_to_the_sharpest_option() {
+        // Unrecognised, missing and wrong-typed all land on the focused window, which is
+        // both the cheapest and the highest-resolution choice — so a model that guesses
+        // badly is not punished for it.
+        for arguments in [
+            serde_json::json!({}),
+            serde_json::json!({ "target": "nonsense" }),
+            serde_json::json!({ "target": 7 }),
+        ] {
+            assert_eq!(
+                Target::from_tool_arguments(&arguments),
+                Target::FocusedWindow,
+                "{arguments}"
+            );
+        }
+    }
+
+    #[test]
+    fn each_documented_target_is_understood() {
+        // Every value in the schema's enum must map to something, or the model would be
+        // offered a choice that silently becomes a different one.
+        let enumerated = capture_screen().parameters["properties"]["target"]["enum"].clone();
+        let values = enumerated.as_array().expect("an enum array").clone();
+        assert_eq!(values.len(), 3);
+
+        for value in values {
+            let name = value.as_str().expect("a string");
+            let target = Target::from_tool_arguments(&serde_json::json!({ "target": name }));
+            let expected = match name {
+                "focused_window" => Target::FocusedWindow,
+                "active_screen" => Target::ActiveScreen,
+                "all_screens" => Target::AllScreens,
+                other => panic!("the schema offers {other:?} and nothing reads it"),
+            };
+            assert_eq!(target, expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn the_description_tells_the_model_a_window_is_sharper() {
+        // The measurement behind it: an ultrawide desktop has to be shrunk to 0.46x to fit
+        // the token budget, while a 1440x900 window fits at 1.09x. Same cost, and the
+        // model has no way to know that unless told.
+        let description = capture_screen().description;
+        assert!(description.contains("higher resolution"), "{description}");
+    }
+
+    #[test]
     fn the_schema_is_a_closed_object_with_one_required_string() {
         // Closed on purpose: an open schema lets a model invent an argument that then has
         // to be ignored somewhere, and "ignored somewhere" is where behaviour goes to
@@ -203,7 +302,10 @@ mod tests {
         let parameters = capture_screen().parameters;
         assert_eq!(parameters["type"], "object");
         assert_eq!(parameters["additionalProperties"], false);
-        assert_eq!(parameters["required"], serde_json::json!(["reason"]));
+        assert_eq!(
+            parameters["required"],
+            serde_json::json!(["target", "reason"])
+        );
         assert_eq!(parameters["properties"]["reason"]["type"], "string");
     }
 

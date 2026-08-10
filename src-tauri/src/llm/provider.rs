@@ -50,7 +50,9 @@ pub enum Message {
     ToolResult {
         call_id: String,
         text: String,
-        image: Option<Image>,
+        /// Usually one, and none when the tool had nothing to show. Three when the model
+        /// asked for every monitor, which is why this is a list rather than an `Option`.
+        images: Vec<Image>,
     },
 }
 

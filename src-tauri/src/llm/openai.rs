@@ -116,7 +116,7 @@ fn push_message(messages: &mut Vec<serde_json::Value>, message: &Message) {
         Message::ToolResult {
             call_id,
             text,
-            image,
+            images,
         } => {
             messages.push(json!({
                 "role": "tool",
@@ -124,13 +124,19 @@ fn push_message(messages: &mut Vec<serde_json::Value>, message: &Message) {
                 "content": text,
             }));
 
-            if let Some(image) = image {
+            if !images.is_empty() {
+                // All of them in one message rather than one message each: they answer a
+                // single question and splitting them would invite the model to treat the
+                // later ones as a new turn.
                 messages.push(json!({
                     "role": "user",
-                    "content": [json!({
-                        "type": "image_url",
-                        "image_url": { "url": data_url(image) },
-                    })],
+                    "content": images
+                        .iter()
+                        .map(|image| json!({
+                            "type": "image_url",
+                            "image_url": { "url": data_url(image) },
+                        }))
+                        .collect::<Vec<_>>(),
                 }));
             }
         }
@@ -777,7 +783,7 @@ mod tests {
         let body = build_request(&with_messages(vec![Message::ToolResult {
             call_id: "call_1".to_string(),
             text: "Screenshot captured.".to_string(),
-            image: Some(a_screenshot()),
+            images: vec![a_screenshot()],
         }]));
 
         let messages = body["messages"].as_array().expect("array");
@@ -803,7 +809,7 @@ mod tests {
         let body = build_request(&with_messages(vec![Message::ToolResult {
             call_id: "call_1".to_string(),
             text: "no screenshot".to_string(),
-            image: None,
+            images: Vec::new(),
         }]));
         assert_eq!(body["messages"].as_array().expect("array").len(), 1);
     }

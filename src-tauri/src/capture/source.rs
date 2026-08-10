@@ -24,6 +24,13 @@ pub struct DisplayInfo {
     /// Whether this is the display the menu bar is on.
     pub is_primary: bool,
 
+    /// Top-left corner in logical points, in the desktop's shared coordinate space.
+    ///
+    /// Not always `(0, 0)` for anything but one display: macOS lays monitors out around
+    /// the primary, so a screen to its left has a negative `x`.
+    pub x: i32,
+    pub y: i32,
+
     /// Logical width in points.
     pub width: u32,
 
@@ -35,6 +42,14 @@ pub struct DisplayInfo {
 }
 
 impl DisplayInfo {
+    /// Whether a point in logical space falls on this display.
+    pub fn contains(&self, (x, y): (i32, i32)) -> bool {
+        x >= self.x
+            && y >= self.y
+            && x < self.x + self.width as i32
+            && y < self.y + self.height as i32
+    }
+
     /// The pixel dimensions a capture of this display will have.
     ///
     /// Rounded rather than truncated: a scale factor arrives as a float and 1512 × 2.0 can
@@ -68,6 +83,30 @@ pub struct WindowInfo {
 
     /// Whether it is the frontmost window.
     pub is_focused: bool,
+
+    /// Where it sits, in **logical points**, in the same coordinate space as
+    /// [`DisplayInfo::x`] and `y`.
+    ///
+    /// Carried so the display holding a window can be worked out. With one monitor that
+    /// question does not arise; with three it is the difference between capturing what
+    /// the user is looking at and capturing whatever happens to be on the primary.
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl WindowInfo {
+    /// The middle of the window, for deciding which display it is on.
+    ///
+    /// The centre rather than the origin: a window straddling two monitors belongs to the
+    /// one showing most of it, and its top-left corner may well be on the other.
+    pub fn centre(&self) -> (i32, i32) {
+        (
+            self.x + (self.width / 2) as i32,
+            self.y + (self.height / 2) as i32,
+        )
+    }
 }
 
 /// What a capture was taken of.
@@ -140,22 +179,85 @@ pub trait ScreenCapture: Send + Sync {
     /// Captures one window, downscaled and encoded.
     fn capture_window(&self, id: u32) -> Result<Capture, CaptureError>;
 
-    /// Captures the display the menu bar is on.
+    /// Captures the frontmost window.
     ///
-    /// Provided rather than required: every implementation would write the same thing, and
-    /// what "active" means is a policy question the trait should answer once. The primary
-    /// display is chosen over the one holding the frontmost window because the panel
-    /// itself is centred on the primary display, so it is the one the user is looking at
-    /// when they invoke Magi.
+    /// Sharper than a whole display for the same token budget, and by a wide margin: a
+    /// 1440x900 window fits the budget at full size, while an ultrawide desktop has to be
+    /// shrunk to under half. Same cost, twice the pixels per character — which is the
+    /// difference between a model reading an error message and guessing at it.
+    fn capture_focused_window(&self) -> Result<Capture, CaptureError> {
+        let windows = self.windows()?;
+        let window = windows
+            .iter()
+            .find(|window| window.is_focused)
+            .or_else(|| windows.first())
+            .ok_or(CaptureError::Vanished { kind: "window" })?;
+
+        self.capture_window(window.id)
+    }
+
+    /// Captures the display the user is looking at.
+    ///
+    /// **The one holding the frontmost window**, not the primary one. An earlier version
+    /// chose the primary because the panel is centred there, which is sound reasoning with
+    /// one monitor and wrong with three: someone working on their second screen who asks
+    /// "what is this error" would have had the first one captured, and nothing in the
+    /// answer would reveal that Magi looked somewhere else.
+    ///
+    /// Falls back to the primary display, then to whatever is first, so an unplugged
+    /// monitor or a desktop with no window in front still produces a screenshot.
     fn capture_active_display(&self) -> Result<Capture, CaptureError> {
         let displays = self.displays()?;
-        let chosen = displays
-            .iter()
-            .find(|display| display.is_primary)
+        if displays.is_empty() {
+            return Err(CaptureError::NoDisplay);
+        }
+
+        let focused_centre = self.windows().ok().and_then(|windows| {
+            windows
+                .iter()
+                .find(|window| window.is_focused)
+                .map(WindowInfo::centre)
+        });
+
+        let chosen = focused_centre
+            .and_then(|centre| displays.iter().find(|display| display.contains(centre)))
+            .or_else(|| displays.iter().find(|display| display.is_primary))
             .or_else(|| displays.first())
             .ok_or(CaptureError::NoDisplay)?;
 
         self.capture_display(chosen.id)
+    }
+
+    /// Captures every display, one image each.
+    ///
+    /// For the question that genuinely spans monitors — "what have I got open" — where one
+    /// screen is not an answer. Each image is budgeted separately, so three monitors cost
+    /// three times as much: worth it when asked for and wasteful as a default, which is
+    /// why the model has to ask.
+    fn capture_all_displays(&self) -> Result<Vec<Capture>, CaptureError> {
+        let displays = self.displays()?;
+        if displays.is_empty() {
+            return Err(CaptureError::NoDisplay);
+        }
+
+        // A display that vanishes mid-loop is skipped rather than failing the set. Two
+        // screenshots out of three is an answer; an error is not.
+        let captured: Vec<Capture> = displays
+            .iter()
+            .filter_map(|screen| match self.capture_display(screen.id) {
+                Ok(capture) => Some(capture),
+                Err(error) => {
+                    let id = screen.id;
+                    tracing::warn!(%error, id, "skipping a display");
+                    None
+                }
+            })
+            .collect();
+
+        if captured.is_empty() {
+            return Err(CaptureError::NoDisplay);
+        }
+        Ok(captured)
     }
 }
 
@@ -166,7 +268,9 @@ pub trait ScreenCapture: Send + Sync {
 /// and test on a CI runner with no display server.
 pub struct FakeCapture {
     displays: Vec<DisplayInfo>,
-    windows: Vec<WindowInfo>,
+    /// `pub(crate)` so tests can move a window between displays, which is the whole
+    /// point of the multi-monitor cases.
+    pub(crate) windows: Vec<WindowInfo>,
     failure: Option<fn() -> CaptureError>,
     /// Every capture this fake was asked for, so tests can assert on what a caller did
     /// rather than only on what it got back.
@@ -181,6 +285,8 @@ impl FakeCapture {
                 id: 1,
                 label: "Built-in Retina Display".to_string(),
                 is_primary: true,
+                x: 0,
+                y: 0,
                 width: 1512,
                 height: 982,
                 scale: 2.0,
@@ -191,12 +297,20 @@ impl FakeCapture {
                     title: "src/main.rs".to_string(),
                     app: "Zed".to_string(),
                     is_focused: true,
+                    x: 100,
+                    y: 100,
+                    width: 1200,
+                    height: 800,
                 },
                 WindowInfo {
                     id: 11,
                     title: "magi — cargo test".to_string(),
                     app: "Terminal".to_string(),
                     is_focused: false,
+                    x: 200,
+                    y: 200,
+                    width: 900,
+                    height: 600,
                 },
             ],
             failure: None,
@@ -211,6 +325,10 @@ impl FakeCapture {
             id: 2,
             label: "DELL U2720Q".to_string(),
             is_primary: false,
+            // To the right of the built-in display, which is how macOS lays out a second
+            // monitor by default and what makes `contains` a meaningful test.
+            x: 1512,
+            y: 0,
             width: 3840,
             height: 2160,
             scale: 1.0,
@@ -374,6 +492,8 @@ mod tests {
             id: 1,
             label: "nearly two".to_string(),
             is_primary: true,
+            x: 0,
+            y: 0,
             width: 1512,
             height: 982,
             scale: 1.999_999_8,
@@ -382,18 +502,77 @@ mod tests {
     }
 
     #[test]
-    fn the_active_display_is_the_primary_one() {
-        let fake = FakeCapture::with_external_display();
-        let capture = fake.capture_active_display().expect("captures");
+    fn the_active_display_is_the_one_holding_the_focused_window() {
+        // The bug this exists to fix, and it only appears with more than one monitor.
+        // Choosing the primary display was defensible with one screen and wrong with
+        // three: someone working on their second monitor who asks "what is this error"
+        // would have had the first one captured, and nothing in the answer would say so.
+        let mut fake = FakeCapture::with_external_display();
+        // Move the focused window onto the external display, which sits to the right.
+        fake.windows[0].x = 2000;
+        fake.windows[0].y = 300;
 
+        let capture = fake.capture_active_display().expect("captures");
         assert_eq!(
             capture.subject,
             Subject::Display {
-                id: 1,
-                label: "Built-in Retina Display".to_string()
+                id: 2,
+                label: "DELL U2720Q".to_string()
             },
-            "the 4K external display was captured instead of the primary one"
+            "the primary display was captured instead of the one being looked at"
         );
+    }
+
+    #[test]
+    fn a_window_straddling_two_displays_belongs_to_the_one_showing_most_of_it() {
+        // Decided by the window's centre rather than its origin, so a window dragged
+        // mostly onto the second monitor counts as being there.
+        let mut fake = FakeCapture::with_external_display();
+        fake.windows[0].x = 1400; // origin still on the built-in display
+        fake.windows[0].width = 1200; // centre at 2000, on the external one
+
+        let capture = fake.capture_active_display().expect("captures");
+        assert!(matches!(capture.subject, Subject::Display { id: 2, .. }));
+    }
+
+    #[test]
+    fn with_no_focused_window_the_primary_display_is_used() {
+        // A bare desktop. Falling back rather than failing: there is still a screen to
+        // photograph, and refusing would turn an unusual state into a broken feature.
+        let mut fake = FakeCapture::with_external_display();
+        for window in &mut fake.windows {
+            window.is_focused = false;
+        }
+
+        // `windows()` reports the first as frontmost, so clear the list entirely.
+        fake.windows.clear();
+
+        let capture = fake.capture_active_display().expect("captures");
+        assert!(matches!(capture.subject, Subject::Display { id: 1, .. }));
+    }
+
+    #[test]
+    fn the_focused_window_is_captured_at_its_own_size() {
+        // Where the resolution comes from: a window fits the token budget at close to
+        // full size, while a whole desktop has to be shrunk to under half.
+        let capture = FakeCapture::laptop()
+            .capture_focused_window()
+            .expect("captures");
+        assert!(matches!(capture.subject, Subject::Window { id: 10, .. },));
+    }
+
+    #[test]
+    fn every_display_is_captured_when_asked_for_all() {
+        let captures = FakeCapture::with_external_display()
+            .capture_all_displays()
+            .expect("captures");
+        assert_eq!(captures.len(), 2);
+        assert!(captures
+            .iter()
+            .any(|capture| matches!(capture.subject, Subject::Display { id: 1, .. })));
+        assert!(captures
+            .iter()
+            .any(|capture| matches!(capture.subject, Subject::Display { id: 2, .. })));
     }
 
     #[test]
