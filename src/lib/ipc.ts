@@ -350,6 +350,15 @@ export const requestScreenRecording = async (): Promise<CaptureView> =>
  * is the evidence — dimensions and token cost included. Screen recording fails in ways that
  * produce no error, so trying it is the only way to know.
  */
+/**
+ * Fires when a model has read the screen during a turn.
+ *
+ * Carries what was captured, so the panel can say *what* was looked at rather than only
+ * that something was. The details — size, cost, why — go to Settings › Screen.
+ */
+export const onCaptured = async (handler: (subject: string) => void) =>
+  listen<string>("magi://captured", (event) => handler(event.payload));
+
 export const testCapture = async (): Promise<CaptureView> =>
   invoke<CaptureView>("test_capture");
 

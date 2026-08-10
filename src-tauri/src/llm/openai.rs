@@ -147,6 +147,77 @@ fn data_url(image: &Image) -> String {
     )
 }
 
+/// Tool-call fragments in one frame, if any.
+///
+/// Separate from [`parse_frame`] because the arities differ, not for tidiness: a frame
+/// carries at most one piece of text and may carry fragments for **several** tool calls
+/// at once — `delta.tool_calls` is an array and its entries can have different indices
+/// in a single chunk, which is how this family streams parallel calls. Folding both into
+/// one function would mean returning a `Vec` for the text case too, where it is always
+/// zero or one.
+pub fn parse_tool_calls(frame: &SseFrame) -> Vec<StreamEvent> {
+    let data = frame.data.trim();
+    if data.is_empty() || data == "[DONE]" {
+        return Vec::new();
+    }
+
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) else {
+        return Vec::new();
+    };
+
+    let Some(calls) = parsed
+        .get("choices")
+        .and_then(|c| c.as_array())
+        .and_then(|c| c.first())
+        .and_then(|c| c.get("delta"))
+        .and_then(|d| d.get("tool_calls"))
+        .and_then(|t| t.as_array())
+    else {
+        return Vec::new();
+    };
+
+    let mut events = Vec::new();
+    for call in calls {
+        // Defaults to 0 rather than skipping. A single call with the index omitted is
+        // the shape some OpenAI-compatible servers produce, and dropping it would lose
+        // the call entirely.
+        let index = call.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+
+        // `id` and `name` arrive on the first fragment and are `null` afterwards, which
+        // is why the accumulator is told never to overwrite a known value with an empty
+        // one. Read as empty strings here so the same call can carry both a start and
+        // an argument fragment.
+        let id = call.get("id").and_then(|i| i.as_str()).unwrap_or_default();
+        let name = call
+            .get("function")
+            .and_then(|f| f.get("name"))
+            .and_then(|n| n.as_str())
+            .unwrap_or_default();
+
+        if !id.is_empty() || !name.is_empty() {
+            events.push(StreamEvent::ToolStart {
+                index,
+                id: id.to_string(),
+                name: name.to_string(),
+            });
+        }
+
+        if let Some(arguments) = call
+            .get("function")
+            .and_then(|f| f.get("arguments"))
+            .and_then(|a| a.as_str())
+            .filter(|a| !a.is_empty())
+        {
+            events.push(StreamEvent::ToolArguments {
+                index,
+                json: arguments.to_string(),
+            });
+        }
+    }
+
+    events
+}
+
 /// Turns one SSE frame into an event, or `None` for frames with nothing to say.
 ///
 /// `None` covers three genuinely uninteresting cases: keepalives, the opening
@@ -194,6 +265,8 @@ pub fn parse_frame(frame: &SseFrame) -> Option<StreamEvent> {
     match choice.get("finish_reason").and_then(|r| r.as_str()) {
         Some("stop") => Some(StreamEvent::Done(StopReason::EndTurn)),
         Some("length") => Some(StreamEvent::Done(StopReason::MaxTokens)),
+        // Not the end of the turn: the loop answers the call and asks again.
+        Some("tool_calls") => Some(StreamEvent::Done(StopReason::ToolUse)),
         // Providers invent their own reasons. Folding an unknown one into
         // EndTurn would report a filtered or errored turn as a clean finish.
         Some(other) => Some(StreamEvent::Done(StopReason::Other(other.to_string()))),
@@ -490,6 +563,88 @@ impl Provider for OpenAiCompatible {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_streamed_tool_call_reassembles_from_the_documented_chunks() {
+        // The fragments are OpenAI's own, from the function-calling guide: `id` and
+        // `name` on the first only, `null` after, and arguments in pieces that are each
+        // invalid JSON.
+        let chunks = [
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_Ddm","type":"function","function":{"name":"capture_screen","arguments":""}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":null,"function":{"arguments":"{\"","name":null}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"reason"}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\":\""}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"the error"}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"}"}}]}}]}"#,
+        ];
+
+        let mut stream = crate::llm::toolstream::ToolCallStream::new();
+        for chunk in chunks {
+            for event in parse_tool_calls(&frame(chunk)) {
+                match event {
+                    StreamEvent::ToolStart { index, id, name } => stream.begin(index, &id, &name),
+                    StreamEvent::ToolArguments { index, json } => {
+                        stream.push_arguments(index, &json)
+                    }
+                    other => panic!("unexpected {other:?}"),
+                }
+            }
+        }
+
+        let calls = stream.finish();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "call_Ddm");
+        assert_eq!(calls[0].name, "capture_screen");
+        assert_eq!(calls[0].arguments["reason"], "the error");
+    }
+
+    #[test]
+    fn a_null_name_does_not_start_a_second_call() {
+        // The later chunks carry `"name": null`. Read as an empty string, they must not
+        // produce a start event that could overwrite the real name with nothing.
+        let events = parse_tool_calls(&frame(
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":null,"function":{"arguments":"x","name":null}}]}}]}"#,
+        ));
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert!(matches!(events[0], StreamEvent::ToolArguments { .. }));
+    }
+
+    #[test]
+    fn two_calls_in_one_chunk_are_kept_apart() {
+        // This family streams parallel calls as several entries in one array, and their
+        // indices are the only thing separating the two argument strings.
+        let events = parse_tool_calls(&frame(
+            r#"{"choices":[{"delta":{"tool_calls":[
+                {"index":0,"id":"a","function":{"name":"capture_screen","arguments":"{}"}},
+                {"index":1,"id":"b","function":{"name":"capture_screen","arguments":"{}"}}
+            ]}}]}"#,
+        ));
+        let indices: Vec<usize> = events
+            .iter()
+            .filter_map(|event| match event {
+                StreamEvent::ToolStart { index, .. } => Some(*index),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(indices, [0, 1]);
+    }
+
+    #[test]
+    fn a_tool_finish_reason_is_not_the_end_of_the_turn() {
+        assert_eq!(
+            parse_frame(&frame(
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#
+            )),
+            Some(StreamEvent::Done(StopReason::ToolUse))
+        );
+    }
+
+    #[test]
+    fn frames_without_tool_calls_produce_nothing() {
+        assert!(parse_tool_calls(&frame(r#"{"choices":[{"delta":{"content":"hi"}}]}"#)).is_empty());
+        assert!(parse_tool_calls(&frame("[DONE]")).is_empty());
+        assert!(parse_tool_calls(&frame("{not json")).is_empty());
+    }
 
     fn a_screenshot() -> Image {
         Image {

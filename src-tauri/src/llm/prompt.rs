@@ -84,29 +84,20 @@ text or error message.";
 
 /// Whether Magi can actually perform a capture during a turn yet.
 ///
-/// **False, and that is the honest state.** `capture::ScreenCaptureKit` works and
-/// Settings can take a test screenshot with it, but nothing connects a *turn* to
-/// it: `TurnRequest` carries no tool definitions, `StreamEvent` has no variant for
-/// a tool call, and there is no loop to run one. Those are M5's remaining tasks.
-///
-/// Until then the prompt must not say otherwise, and this flag is why. Told it can
-/// call `capture_screen`, a Tier 1 model tries, receives nothing, and **invents the
-/// screenshot** — observed verbatim in its own reasoning:
+/// **True now.** It was false for one release's worth of commits, and the reason is worth
+/// keeping: told it could call `capture_screen` while nothing executed the call, a Tier 1
+/// model did not fail — it **invented the screenshot**, verbatim in its own reasoning:
 ///
 /// ```text
 /// [Capture_screen tool called. Assuming the screenshot shows a word processor
 ///  like Microsoft Word or Google Docs.]
-/// Tu programa abierto es un procesador de texto, como Microsoft Word.
 /// ```
 ///
-/// The user had a terminal open. That is the exact failure the whole agentic-vision
-/// design exists to prevent — the design doc's "a model that assumes it can already
-/// see will answer confidently about a screen it never looked at" — and promising a
-/// capability the code does not deliver is how Magi caused it rather than avoided it.
-///
-/// Flip this to `true` in the same commit that lands the tool-call loop. The
-/// per-tier clauses below are already correct and tested for that day.
-const CAPTURE_IS_WIRED: bool = false;
+/// The user had a terminal open. A model's tier says what the *model* can do; this says
+/// what *Magi* can do with it, and the prompt must reflect the smaller of the two. Set it
+/// back to `false` if the loop is ever taken out again, rather than leaving the promise
+/// standing.
+const CAPTURE_IS_WIRED: bool = true;
 
 /// The capture clause for a tier.
 ///
@@ -199,24 +190,17 @@ mod tests {
     }
 
     #[test]
-    fn no_tier_promises_capture_while_it_is_unwired() {
-        // The assertion that matters *today*. A Tier 1 model told it can call
-        // `capture_screen` when nothing executes the call does not fail — it invents
-        // the screenshot and answers confidently about a screen it never saw. That
-        // happened, and this is the guard against it happening again.
-        // No assertion on `CAPTURE_IS_WIRED` itself — that would be a constant, and
-        // clippy is right that it proves nothing. This test announces its own
-        // obsolescence instead: flip the flag and it fails here, on the tier that has
-        // just been given the tool, which is exactly when it should be deleted.
+    fn only_the_agentic_tier_names_the_tool() {
+        // The load-bearing assertion of this module, and live again now that the loop
+        // exists. Naming a tool to tier 2 makes it write malformed tool syntax into
+        // prose; naming it to tier 3 makes a blind model offer to look at the screen.
         for tier in EVERY_TIER {
             let prompt = system_prompt(tier, "");
-            assert!(
-                !prompt.contains("capture_screen"),
-                "{tier:?} promises a tool nothing can execute"
-            );
-            assert!(
-                prompt.contains("cannot see"),
-                "{tier:?} does not say plainly that it cannot see the screen"
+            let names_tool = prompt.contains("capture_screen");
+            assert_eq!(
+                names_tool,
+                tier == Tier::Agentic,
+                "{tier:?} mentions capture_screen: {names_tool}, which is wrong"
             );
         }
     }

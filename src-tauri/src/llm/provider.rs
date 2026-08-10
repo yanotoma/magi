@@ -115,6 +115,11 @@ pub struct TurnRequest {
 pub enum StopReason {
     EndTurn,
     MaxTokens,
+    /// The model stopped because it wants a tool run.
+    ///
+    /// Not a failure and not the end of the turn: the loop answers the call and asks
+    /// again. Anthropic calls this `tool_use` and the OpenAI family `tool_calls`.
+    ToolUse,
     Other(String),
 }
 
@@ -128,6 +133,24 @@ pub enum StreamEvent {
     /// displayable independently: merged, the user would read the working as
     /// though it were the conclusion. Not every model emits it.
     Thinking(String),
+
+    /// A tool call is starting, at `index` within this response.
+    ///
+    /// Consumed by the command layer rather than forwarded to the panel — these two
+    /// variants are wire-level fragments, and what the panel eventually hears about is
+    /// the capture that results. They live here so a provider's frame parser can stay a
+    /// pure function of one frame, with all the remembering in one place.
+    ToolStart {
+        index: usize,
+        id: String,
+        name: String,
+    },
+
+    /// More argument JSON for the call at `index`. Never valid JSON on its own.
+    ToolArguments {
+        index: usize,
+        json: String,
+    },
 
     Done(StopReason),
 }
@@ -462,6 +485,8 @@ mod tests {
                 // Reasoning is collected separately; a test that folded it into
                 // `tokens` would pass while the panel mixed the two.
                 StreamEvent::Thinking(_) => {}
+                // Wire fragments, consumed by the command layer rather than the panel.
+                StreamEvent::ToolStart { .. } | StreamEvent::ToolArguments { .. } => {}
                 StreamEvent::Done(_) => finished = true,
             }
         }

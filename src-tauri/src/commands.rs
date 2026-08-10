@@ -886,39 +886,103 @@ pub async fn send_text_turn(
 
     let provider = registry::build(state.http.clone(), &provider_config, api_key);
 
-    // A modest buffer, deliberately. If the UI falls behind, the provider should
-    // wait rather than let an unbounded queue grow between the model and the panel.
-    let (tx, mut rx) = mpsc::channel::<StreamEvent>(64);
-
     let task = tauri::async_runtime::spawn(async move {
-        // Forwarding runs alongside the request so tokens reach the panel as they
-        // arrive rather than after the answer is complete.
-        let forward = async {
-            while let Some(event) = rx.recv().await {
-                let emitted = match event {
-                    StreamEvent::Token(token) => app.emit("magi://token", token),
-                    // Always emitted; the panel decides whether to show it. The
-                    // channel is in-process, so the cost of sending it when it is
-                    // hidden is not worth a round trip to read a setting here.
-                    StreamEvent::Thinking(thought) => app.emit("magi://thinking", thought),
-                    StreamEvent::Done(reason) => app.emit("magi://turn-done", describe(&reason)),
-                };
-                if let Err(error) = emitted {
-                    tracing::warn!(%error, "could not emit a turn event");
-                    break;
+        let mut request = request;
+        // One budget for the whole turn, not per request: the point is to bound how many
+        // times a model can go round, and a fresh budget each iteration would bound
+        // nothing.
+        let mut budget = crate::llm::tools::CaptureBudget::new();
+
+        loop {
+            // A modest buffer, deliberately. If the UI falls behind, the provider should
+            // wait rather than let an unbounded queue grow between the model and the panel.
+            let (tx, mut rx) = mpsc::channel::<StreamEvent>(64);
+
+            let mut answer = String::new();
+            let mut calls = crate::llm::toolstream::ToolCallStream::new();
+            let mut stop = StopReason::EndTurn;
+
+            // Forwarding runs alongside the request so tokens reach the panel as they
+            // arrive rather than after the answer is complete.
+            let forward = async {
+                while let Some(event) = rx.recv().await {
+                    let emitted = match event {
+                        StreamEvent::Token(token) => {
+                            // Kept as well as forwarded. The assistant's turn has to be
+                            // replayed whole when a tool result follows it, and the panel
+                            // is not a place to read it back from.
+                            answer.push_str(&token);
+                            app.emit("magi://token", token)
+                        }
+                        // Always emitted; the panel decides whether to show it. The
+                        // channel is in-process, so the cost of sending it when it is
+                        // hidden is not worth a round trip to read a setting here.
+                        StreamEvent::Thinking(thought) => app.emit("magi://thinking", thought),
+                        // Consumed rather than forwarded: these are wire fragments, and
+                        // what the panel hears about is the capture that results.
+                        StreamEvent::ToolStart { index, id, name } => {
+                            calls.begin(index, &id, &name);
+                            Ok(())
+                        }
+                        StreamEvent::ToolArguments { index, json } => {
+                            calls.push_arguments(index, &json);
+                            Ok(())
+                        }
+                        // Held back. A turn that stopped to call a tool is not finished,
+                        // and telling the panel it was would end the answer mid-thought.
+                        StreamEvent::Done(reason) => {
+                            stop = reason;
+                            Ok(())
+                        }
+                    };
+                    if let Err(error) = emitted {
+                        tracing::warn!(%error, "could not emit a turn event");
+                        break;
+                    }
                 }
+            };
+
+            // Both halves run together so tokens reach the panel as they arrive
+            // rather than after the answer is complete.
+            let (result, ()) = tokio::join!(provider.turn(request.clone(), tx), forward);
+
+            if let Err(error) = result {
+                let message = error.to_string();
+                tracing::warn!(%message, "turn failed");
+                if let Err(error) = app.emit("magi://error", message) {
+                    tracing::warn!(%error, "could not emit the turn error");
+                }
+                return;
             }
-        };
 
-        // Both halves run together so tokens reach the panel as they arrive
-        // rather than after the answer is complete.
-        let (result, ()) = tokio::join!(provider.turn(request, tx), forward);
+            let calls = calls.finish();
+            if calls.is_empty() {
+                // The ordinary end of a turn. Also where a model that said
+                // `stop_reason: tool_use` and then named no call lands, which is a
+                // malformed response rather than a loop to continue.
+                if matches!(stop, StopReason::ToolUse) {
+                    tracing::warn!("the model stopped for a tool call and named none");
+                }
+                if let Err(error) = app.emit("magi://turn-done", describe(&stop)) {
+                    tracing::warn!(%error, "could not emit the turn completion");
+                }
+                return;
+            }
 
-        if let Err(error) = result {
-            let message = error.to_string();
-            tracing::warn!(%message, "turn failed");
-            if let Err(error) = app.emit("magi://error", message) {
-                tracing::warn!(%error, "could not emit the turn error");
+            // The assistant's turn goes back whole, prose and calls together. Dropping
+            // the calls and keeping the prose makes the results below reference calls
+            // that are no longer in the history, which both APIs reject.
+            request.messages.push(Message::Assistant {
+                text: std::mem::take(&mut answer),
+                calls: calls.clone(),
+            });
+
+            // One result per call, always. A call left unanswered is an error rather
+            // than a missing detail.
+            for call in &calls {
+                request
+                    .messages
+                    .push(answer_call(&app, call, &mut budget).await);
             }
         }
     });
@@ -963,7 +1027,98 @@ fn describe(reason: &StopReason) -> Option<String> {
     match reason {
         StopReason::EndTurn => None,
         StopReason::MaxTokens => Some("The reply hit the length limit.".to_string()),
+        // Only reachable when the loop ended on a tool stop with no call to run, which
+        // is a malformed response. Named rather than hidden: the user is looking at a
+        // reply that stops mid-thought and deserves to know why.
+        StopReason::ToolUse => {
+            Some("The model asked to use a tool and did not say which.".to_string())
+        }
         StopReason::Other(other) => Some(format!("The model stopped: {other}")),
+    }
+}
+
+/// Runs one tool call and produces the message that answers it.
+///
+/// Never fails. Every outcome is a `ToolResult` the model can read, because the
+/// alternative — aborting the turn — loses an answer the model could still have given
+/// from what it already knows. A screenshot it could not get is a fact it can work with;
+/// silence is not.
+async fn answer_call(
+    app: &tauri::AppHandle,
+    call: &crate::llm::provider::ToolCall,
+    budget: &mut crate::llm::tools::CaptureBudget,
+) -> Message {
+    use tauri::Manager;
+
+    let refuse = |text: String| Message::ToolResult {
+        call_id: call.id.clone(),
+        text,
+        image: None,
+    };
+
+    if call.name != crate::llm::tools::CAPTURE_SCREEN {
+        // Magi offers exactly one tool, so this is a model inventing a name — which one
+        // did, calling `users_screen`. Naming what was asked for beats a generic refusal:
+        // it is the difference between the model correcting itself and repeating itself.
+        tracing::warn!(name = %call.name, "the model called a tool that does not exist");
+        return refuse(format!(
+            "There is no tool called `{}`. The only tool available is `{}`.",
+            call.name,
+            crate::llm::tools::CAPTURE_SCREEN
+        ));
+    }
+
+    if !budget.has_room() {
+        return refuse(budget.exhausted_message());
+    }
+    budget.spend();
+
+    let reason = crate::llm::tools::Reason::from_tool_arguments(&call.arguments);
+
+    // `spawn_blocking`, because a capture is a synchronous round trip through the window
+    // server. Holding a runtime worker for it starves everything else that runtime polls.
+    let screen = Arc::clone(&app.state::<AppState>().screen);
+    let captured = tauri::async_runtime::spawn_blocking(move || screen.capture_active_display())
+        .await
+        .map_err(|error| error.to_string())
+        .and_then(|result| result.map_err(|error| error.to_string()));
+
+    let capture = match captured {
+        Ok(capture) => capture,
+        Err(message) => {
+            tracing::warn!(%message, "the capture the model asked for failed");
+            // The model is told, in words it can act on. A permission problem is the
+            // likely one and it can say so to the user, which is more useful than Magi
+            // failing the turn behind its back.
+            return refuse(format!("The screenshot could not be taken: {message}"));
+        }
+    };
+
+    let state = app.state::<AppState>();
+    state.capture_log.record(crate::capture::Entry {
+        at: unix_millis(),
+        subject: capture.subject.clone(),
+        reason,
+        width: capture.width,
+        height: capture.height,
+        visual_tokens: capture.visual_tokens(),
+    });
+
+    // The panel shows that the screen was read. Emitted after the log entry exists, so
+    // opening Settings the moment the indicator appears never shows an empty list.
+    if let Err(error) = app.emit("magi://captured", capture.subject.describe()) {
+        tracing::warn!(%error, "could not announce the capture");
+    }
+
+    Message::ToolResult {
+        call_id: call.id.clone(),
+        // Short and factual. The model has the image; a description of it here would
+        // compete with what it can see for itself.
+        text: format!("Screenshot of {}.", capture.subject.describe()),
+        image: Some(crate::llm::provider::Image {
+            media_type: "image/png",
+            bytes: capture.png,
+        }),
     }
 }
 

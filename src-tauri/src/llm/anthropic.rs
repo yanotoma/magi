@@ -170,6 +170,8 @@ fn stop_reason(raw: &str) -> StopReason {
     match raw {
         "end_turn" | "stop_sequence" => StopReason::EndTurn,
         "max_tokens" => StopReason::MaxTokens,
+        // Not the end of the turn: the loop answers the call and asks again.
+        "tool_use" => StopReason::ToolUse,
         // `refusal` lands here on purpose. A safety classifier can decline with
         // HTTP 200, and folding that into EndTurn would show the user an empty
         // answer with nothing to explain it.
@@ -192,6 +194,20 @@ pub fn parse_frame(frame: &SseFrame) -> Option<StreamEvent> {
     let parsed: serde_json::Value = serde_json::from_str(data).ok()?;
 
     match parsed.get("type").and_then(|t| t.as_str())? {
+        // A tool call beginning. `id` and `name` are both present here; `input` is an
+        // empty object and must not be read — the arguments arrive as fragments after.
+        "content_block_start" => {
+            let block = parsed.get("content_block")?;
+            if block.get("type")?.as_str()? != "tool_use" {
+                return None;
+            }
+            Some(StreamEvent::ToolStart {
+                index: parsed.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize,
+                id: block.get("id")?.as_str()?.to_string(),
+                name: block.get("name")?.as_str()?.to_string(),
+            })
+        }
+
         "content_block_delta" => {
             let delta = parsed.get("delta")?;
             // Text is the answer; thinking is the working. They travel as
@@ -208,6 +224,21 @@ pub fn parse_frame(frame: &SseFrame) -> Option<StreamEvent> {
                     .and_then(|t| t.as_str())
                     .filter(|t| !t.is_empty())
                     .map(|t| StreamEvent::Thinking(t.to_string())),
+                // Tool arguments: a fragment, never valid JSON alone. Anthropic's own
+                // docs call these "partial JSON strings" and note that the final `input`
+                // is an object. The first fragment is always `""`, which is why the empty
+                // string is passed through rather than filtered — the accumulator treats
+                // appending nothing as nothing.
+                "input_json_delta" => {
+                    delta
+                        .get("partial_json")
+                        .and_then(|j| j.as_str())
+                        .map(|json| StreamEvent::ToolArguments {
+                            index: parsed.get("index").and_then(|i| i.as_u64()).unwrap_or(0)
+                                as usize,
+                            json: json.to_string(),
+                        })
+                }
                 _ => None,
             }
         }
@@ -499,6 +530,86 @@ impl Provider for Anthropic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_streamed_tool_call_reassembles_from_the_documented_events() {
+        // Anthropic's own example sequence, abbreviated: the block start carries `id` and
+        // `name` with `input` as an empty object, then `input_json_delta` fragments whose
+        // first is always the empty string.
+        let events = [
+            (
+                "content_block_start",
+                r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_01T","name":"capture_screen","input":{}}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":""}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"reason\":"}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":" \"the error\"}"}}"#,
+            ),
+        ];
+
+        let mut stream = crate::llm::toolstream::ToolCallStream::new();
+        for (name, data) in events {
+            match parse_frame(&frame(name, data)) {
+                Some(StreamEvent::ToolStart { index, id, name }) => stream.begin(index, &id, &name),
+                Some(StreamEvent::ToolArguments { index, json }) => {
+                    stream.push_arguments(index, &json)
+                }
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+
+        let calls = stream.finish();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "toolu_01T");
+        assert_eq!(calls[0].name, "capture_screen");
+        assert_eq!(calls[0].arguments["reason"], "the error");
+    }
+
+    #[test]
+    fn a_text_block_start_is_not_a_tool_call() {
+        // Every response opens a text block. Treating that as a tool start would invent a
+        // nameless call on every single turn.
+        assert_eq!(
+            parse_frame(&frame(
+                "content_block_start",
+                r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn the_tool_use_stop_reason_is_not_the_end_of_the_turn() {
+        assert_eq!(
+            parse_frame(&frame(
+                "message_delta",
+                r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"}}"#
+            )),
+            Some(StreamEvent::Done(StopReason::ToolUse))
+        );
+    }
+
+    #[test]
+    fn the_block_index_separates_parallel_calls() {
+        // Anthropic streams parallel calls as separate blocks, distinguished only by the
+        // index that also positions them in the final content array.
+        let second = parse_frame(&frame(
+            "content_block_start",
+            r#"{"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"toolu_02","name":"capture_screen","input":{}}}"#,
+        ));
+        assert!(matches!(
+            second,
+            Some(StreamEvent::ToolStart { index: 2, .. })
+        ));
+    }
 
     fn a_screenshot() -> Image {
         Image {
