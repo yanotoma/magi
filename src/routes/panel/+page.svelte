@@ -138,6 +138,19 @@
     // Stop before hiding: a request left running would keep streaming into a
     // panel nobody is looking at, and still cost tokens.
     if (busy) await stop();
+
+    // And discard the thread, which the design doc promises twice — "dismissing it
+    // ends the thread", and "no conversation persistence in v1... privacy-preserving
+    // default". It was not happening: `reset` existed, was imported, and had no
+    // caller, so dismissing merely hid a conversation that came back on reopening.
+    //
+    // The cost is real and accepted: Escape reaches here, so a mistaken Escape loses
+    // the thread. That is the trade the design made deliberately, and a thread that
+    // quietly outlives its dismissal is the worse failure — the user believes it is
+    // gone, and it is not.
+    reset();
+    captured = null;
+
     await getCurrentWindow().hide();
   };
 

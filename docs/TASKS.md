@@ -5,7 +5,7 @@ Complete breakdown of what is done and what is pending, across every milestone.
 **Last updated:** 2026-08-10
 **Current phase:** M5 — screen capture & agentic vision, targeting `0.4.0-alpha.1`
 **Current version:** `0.2.0-alpha.2` (released — see [VERSIONING.md](VERSIONING.md))
-**Overall:** 113 / 160 tasks done (71%)
+**Overall:** 121 / 162 tasks done (75%)
 
 Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 
@@ -21,9 +21,9 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 | **M3** | Pre-flight & capability tiers | `0.2.0-alpha.2` | 13 | 14 | ✅ Shipped |
 | **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 27 | 27 | ✅ Shipped |
 | **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 15 | 16 | ✅ Shipped |
-| **M6** | Session machine & panel UX | `0.5.0-beta.1` | 0 | 16 | ⬜ |
+| **M6** | Session machine & panel UX | `0.5.0-beta.1` | 8 | 18 | 🔨 In progress |
 | **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 14 | ⬜ |
-| — | **v1 total** | `1.0.0` | **113** | **146** | |
+| — | **v1 total** | `1.0.0` | **121** | **148** | |
 | **M8** | v2 — wake word & TTS | `1.1.0` | 0 | 9 | 🔮 Post-v1 |
 | **M9** | v3 — computer use | `1.2.0` | 0 | 5 | 🔮 Post-v1 |
 
@@ -223,22 +223,33 @@ Deliberately not the session state machine, which is M6's. This is the smallest 
 
 **Rust**
 - [ ] `session.rs` — the state machine (Idle → Listening → Transcribing → Thinking → Capturing → Streaming → Idle)
-- [ ] Conversation thread held in memory; discarded on dismiss
-- [ ] History assembly with a token budget and truncation strategy
-- [ ] Tauri commands: `toggle_session`, `send_text_turn`, `dismiss_session`
-- [ ] Emit `magi://state`, `magi://token`, `magi://error`
-- [ ] Cancellation — dismissing mid-stream must actually abort the request
+- [x] Conversation thread held in memory; discarded on dismiss. The discard was missing until M6 began: `reset` existed, was imported by the panel, and had no caller, so dismissing hid a thread that returned on reopening — against a design-doc promise made twice, and a privacy one at that
+- [ ] History assembly with a token budget and truncation strategy. Assembly exists; nothing bounds it, so a long thread grows until the model refuses it — and with images resent every turn, sooner than length alone suggests
+- [ ] `toggle_session` — the hotkey action that moves the state machine out of Idle. `send_text_turn` and `cancel_turn` already exist and are wired. `dismiss_session` is **dropped**: the panel already composes `cancelTurn()` with hiding the window, and a backend command would duplicate that without adding anything
+- [ ] Emit `magi://state` from the session machine. `magi://token` and `magi://error` already exist — as do nine more events added since this was written, which is itself the argument for one state event rather than a growing vocabulary the panel has to infer from
+- [x] Cancellation — dismissing mid-stream actually aborts the request. `dismiss()` calls `stop()`, which is `cancelTurn()` plus `cancelStream()`; the backend aborts the task, which drops the receiver so the provider stops on its next send. Both halves are needed — an aborted task cannot emit a completion, so nothing would clear the streaming state and the panel would sit showing Stop
 - [ ] Unit tests for every state transition, including error paths
 
 **Svelte**
-- [ ] `conversation.svelte.ts` — shared rune state
-- [ ] Panel — thread view with per-turn roles
-- [ ] Panel — token-by-token streaming render
-- [ ] Panel — status indicator per state, including a distinct capture indicator
-- [ ] Panel — text input for typed follow-ups
-- [ ] Panel — Esc dismisses; click-outside behavior
-- [ ] Panel — inline error surfaces per failure class
-- [ ] Panel — markdown and code-block rendering with syntax highlighting
+- [x] `conversation.svelte.ts` — shared rune state. The `.svelte.ts` extension is required: runes in a plain `.ts` file are a compile error
+- [x] Panel — thread view with per-turn roles
+- [x] Panel — token-by-token streaming render
+- [x] Panel — status indicator per state, including a distinct capture indicator: a spinner while the request is away, a pulse while recording and transcribing, "Read <what>" while a screenshot is in play, and an inline alert on failure
+- [ ] Tray — drive the icon from the session state. `ShellState` already has five variants
+      and `tray_icon_name` maps them, but neither has a caller outside tests: the icon is
+      assigned once in `init` and never changes, so the tray always shows idle. Nothing about
+      the tray is done however much of it exists. The state machine above is what it should
+      follow
+- [ ] Tray — art for `Degraded`, the one state with none. Deferred with a real reason
+      recorded in `tools/generate_tray_icon.py`: a cancel slash across three separated nodes
+      reads as nothing at 22pt, because the mark is discontinuous and every crossing forces a
+      choice between eating the ring and breaking the bar. It needs a different idea, looked
+      at in a real menu bar. `PanelOpen` is already settled — it shares `tray-idle`, since a
+      panel that is open is visible on screen and needs no second announcement
+- [x] Panel — text input for typed follow-ups
+- [ ] Panel — click-outside dismisses. Esc already does
+- [x] Panel — inline error surfaces per failure class, and notices separately from errors — a recording that hit the two-minute cap is worth saying and is not a failure
+- [ ] Code-block syntax highlighting. Markdown itself is done, with a renderer configured so it *cannot* emit HTML rather than emitting it and sanitising after
 - [ ] Prompt templates: pre-written user prompts bound to a trigger ("explain this error", "summarise this screen"). Distinct from the system prompt — these are user turns, not instructions, and they belong in the panel UI rather than in the prompt assembler
 
 ---
