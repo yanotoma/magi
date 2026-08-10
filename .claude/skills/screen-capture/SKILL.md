@@ -233,6 +233,29 @@ Either backend belongs behind `[target.'cfg(target_os = "macos")'.dependencies]`
 and its fake stay cross-platform, which is what lets the whole crate build and test on a
 Linux CI runner with no display server.
 
+## The active display is the one being looked at, not the primary one
+
+"Active display" means the display that contains the frontmost window, not the display macOS designates as primary. On a single monitor the distinction does not exist. On a multi-monitor desk it is the difference between capturing what the user is looking at and capturing a display that may be showing a Finder window or nothing at all.
+
+The right heuristic: find the frontmost window, take its centre point, and assign it to whichever display's bounds contain that point. A window that straddles two displays belongs to whichever one shows more of it — the centre is the tiebreaker. Choosing the primary display is defensible only with one monitor; with three it is almost certainly wrong.
+
+This matters in practice. Measured on a three-monitor desk with the primary display to the left and the working display in the centre, "capture active screen" with a primary-first heuristic delivered a second monitor that had nothing on it. The distinction looked academic until it produced a wrong answer.
+
+## The budget limits area, not detail — capture the window, not the desktop
+
+Measured figures, standard tier:
+
+| Target | Dimensions | Visual tokens | Ratio |
+|---|---|---|---|
+| Focused window (1440×900) | fits under cap | ~1.09× | 1.0 (baseline) |
+| Full ultrawide desktop (3440×1440) | shrinks to fit | ~0.46× | same token cost, ~2.4× fewer pixels per character |
+
+At the same token budget, a focused window delivers roughly 2.4× the pixel density of a full ultrawide screenshot. The desktop version spends most of its budget on wallpaper and taskbar chrome.
+
+The precise answer is often not in the pixels at all. A model was observed reading blurry pixels to recover application names that the window list returns exactly as strings. The tool result sends the window list as text alongside the image for exactly this reason: the model gets the information it needs without paying pixel tokens for it.
+
+That said, `active_screen` and `all_screens` are real targets — some tasks (comparing windows on different monitors, reading a notification that appeared on another display) genuinely need the wider view. The point is that the focused window should be the default, not the full desktop.
+
 ## Test what cannot be tested with a display
 
 No test may require a screen. What is testable without one is most of what matters:

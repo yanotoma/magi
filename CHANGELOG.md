@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+- **Agentic screen capture.** Ask something that needs a visual answer — "what's this error?", "why does this look off?" — and the model reaches for the screen itself. It photographs what is in front of you, says what it looked at in the panel, and answers from the image. No extra configuration required: the model decides when a screenshot helps, provided it passed the *Agentic capture* check in Settings → Models.
+- **Focused capture by default.** Magi photographs the window in front of you rather than the whole display. A focused window fits the token budget at roughly 1.1×; a full ultra-wide desktop shrinks to 0.46× to fit — same token cost, about 2.4× the pixels per character. The model can ask for the active screen or every monitor when the task calls for it.
+- **Capture indicator in the panel.** The panel shows "Read <what>" while the model is working with a screenshot, so you can see when it happened and what it looked at.
+- **Settings → Screen now logs captures.** Before this release the list was always empty — there was nothing to capture. It fills in as the model works. Each entry shows what was captured, why, the pixel dimensions, and the visual-token cost.
+
 ### Changed
 - macOS 14 (Sonoma) is now the minimum, up from macOS 11. Screen capture uses ScreenCaptureKit, Apple's current API: the one it replaces returns a picture of an empty desktop when permission is missing rather than reporting an error, which would mean a model answering confidently about a screen it never saw. ScreenCaptureKit's one-shot screenshot call arrives in macOS 14. Supporting 12.3 and 13 is possible through a longer streaming path and may come later — that would only lower the floor, never raise it again
 
