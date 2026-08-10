@@ -288,6 +288,84 @@ export const openPermissionSettings = async (kind: "microphone" | "accessibility
   invoke("open_permission_settings", { kind });
 
 /**
+ * The captured subject — either a full display or a specific application window.
+ *
+ * macOS withholds other apps' window titles when screen-recording permission is
+ * absent, so `title` can be empty even when the window exists.
+ */
+export type CaptureSubject =
+  | { kind: "display"; id: number; label: string }
+  | { kind: "window"; id: number; title: string; app: string };
+
+/** Why a capture happened, and who or what triggered it. */
+export type CaptureReason = {
+  /** The full rendered sentence — render verbatim, do not rebuild it. */
+  text: string;
+  asked_by: "model" | "you";
+};
+
+/** One screen-capture event, as the backend recorded it. */
+export type CaptureEntry = {
+  /** Milliseconds since the Unix epoch. */
+  at: number;
+  subject: CaptureSubject;
+  reason: CaptureReason;
+  width: number;
+  height: number;
+  visual_tokens: number;
+};
+
+export type CaptureView = {
+  screen_recording: Permission;
+  screen_recording_explanation: string;
+  screen_recording_settings_url: string;
+  /** Most recent first, ordered by the backend. */
+  entries: CaptureEntry[];
+};
+
+export const getCapture = async (): Promise<CaptureView> =>
+  invoke<CaptureView>("get_capture");
+
+/**
+ * Clears the in-memory capture log and returns the updated view.
+ *
+ * The log is never written to disk — this clears only what has accumulated
+ * since launch.
+ */
+/**
+ * Asks macOS for screen-recording permission.
+ *
+ * The only way Magi appears in System Settings › Privacy & Security › Screen Recording at
+ * all: that list is built from apps that have *requested* the permission, and reading the
+ * state registers nothing. Opens System Settings as a side effect, so only ever call it
+ * from an explicit action.
+ */
+export const requestScreenRecording = async (): Promise<CaptureView> =>
+  invoke<CaptureView>("request_screen_recording");
+
+/**
+ * Takes one screenshot deliberately, so the user can confirm screen reading works.
+ *
+ * The image is not returned. What comes back is the refreshed view, whose newest log entry
+ * is the evidence — dimensions and token cost included. Screen recording fails in ways that
+ * produce no error, so trying it is the only way to know.
+ */
+/**
+ * Fires when a model has read the screen during a turn.
+ *
+ * Carries what was captured, so the panel can say *what* was looked at rather than only
+ * that something was. The details — size, cost, why — go to Settings › Screen.
+ */
+export const onCaptured = async (handler: (subject: string) => void) =>
+  listen<string>("magi://captured", (event) => handler(event.payload));
+
+export const testCapture = async (): Promise<CaptureView> =>
+  invoke<CaptureView>("test_capture");
+
+export const clearCaptureLog = async (): Promise<CaptureView> =>
+  invoke<CaptureView>("clear_capture_log");
+
+/**
  * Subscribes to model-download progress.
  *
  * Bundled with the completion event so a caller cannot unsubscribe from one and leak

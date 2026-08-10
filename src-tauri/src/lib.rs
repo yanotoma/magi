@@ -5,6 +5,7 @@
 //! startup.
 
 pub mod audio;
+pub mod capture;
 pub mod commands;
 pub mod config;
 pub mod error;
@@ -112,6 +113,14 @@ pub fn run() {
                 secrets: std::sync::Arc::new(KeyringStore),
                 key_hints: Mutex::new(std::collections::HashMap::new()),
                 capabilities: Mutex::new(capabilities),
+                // ScreenCaptureKit on macOS; the fake everywhere else, so a Linux build
+                // links and runs rather than needing a second `AppState` shape. Nothing
+                // reaches this yet — the tool-call loop that would is M5's remaining work.
+                #[cfg(target_os = "macos")]
+                screen: std::sync::Arc::new(crate::capture::ScreenCaptureKit::new()),
+                #[cfg(not(target_os = "macos"))]
+                screen: std::sync::Arc::new(crate::capture::FakeCapture::headless()),
+                capture_log: std::sync::Arc::new(crate::capture::CaptureLog::new()),
                 in_flight: Mutex::new(None),
             });
 
@@ -154,6 +163,10 @@ pub fn run() {
             commands::set_voice_languages,
             commands::download_speech_model,
             commands::remove_speech_model,
+            commands::get_capture,
+            commands::clear_capture_log,
+            commands::request_screen_recording,
+            commands::test_capture,
             commands::open_permission_settings,
             commands::send_text_turn,
             commands::cancel_turn,

@@ -74,6 +74,7 @@ mod tests {
                     system: None,
                     messages: vec![Message::user("hi")],
                     max_tokens: 16,
+                    tools: Vec::new(),
                 },
                 tx,
             )

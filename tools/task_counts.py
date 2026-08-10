@@ -32,9 +32,16 @@ def count_by_milestone(text: str) -> dict[str, tuple[int, int]]:
         heading = re.match(r"(M\d)\b", section)
         if not heading:
             continue
+        # `[x]` is done. Everything else the legend defines — `[ ]`, `[~]` in progress,
+        # `[!]` blocked — is not done but still counts toward the total.
+        #
+        # Counting only `[x]` and `[ ]` was the earlier behaviour and it was quietly
+        # wrong: marking a task `[~]` removed it from the denominator, so a milestone
+        # looked *smaller* the moment someone used a marker the legend advertises. The
+        # first `[~]` in this file dropped M5 from 15 tasks to 14 and nothing said so.
         done = len(re.findall(r"^- \[x\]", section, re.M))
-        pending = len(re.findall(r"^- \[ \]", section, re.M))
-        counts[heading.group(1)] = (done, done + pending)
+        other = len(re.findall(r"^- \[[^x]\]", section, re.M))
+        counts[heading.group(1)] = (done, done + other)
     return counts
 
 

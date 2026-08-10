@@ -104,6 +104,22 @@ Both are SSE, and both need incremental token emission into `magi://token`.
 
 Local backends are the ones that break here. Ollama and LM Studio have both shipped versions with subtly different SSE framing — missing `[DONE]`, non-standard keep-alives, chunked JSON split across frames. **Parse defensively and never assume a frame is a complete JSON object.**
 
+## Streaming tool calls
+
+No individual SSE fragment for a tool call is valid JSON in either family. **Concatenate all fragments keyed by index, then parse once at the end.**
+
+**Anthropic:** A `content_block_start` event with `content_block.type == "tool_use"` carries `id` and `name`; its `input` field is `{}` and must not be read — it is a placeholder. Arguments arrive as `content_block_delta` events with `delta.type == "input_json_delta"` and a `partial_json` string; the first fragment is always `""`. `content_block_stop` ends the block; `message_delta` carries `stop_reason: "tool_use"`.
+
+**OpenAI-compatible:** `choices[0].delta.tool_calls` is an array. Each entry carries an `index`; `id` and `function.name` arrive on the first fragment for that index and are `null` on all subsequent ones; `function.arguments` arrives in pieces. `finish_reason: "tool_calls"` signals the end.
+
+**The divergence that matters most: an OpenAI-family tool message is text only.** Its API reference states "For tool messages, only type `text` is supported" — an image cannot ride inside a tool result and must follow as a separate `user` message with an `image_url` part. Anthropic nests the image directly inside `tool_result.content`. A single capture result therefore becomes two wire messages in the OpenAI family and one in Anthropic's.
+
+Three more format differences worth pinning:
+
+- Tool arguments go out as an encoded JSON **string** in the OpenAI family (`function.arguments`) and as an **object** in Anthropic's (`input`).
+- Anthropic's tool definition uses `input_schema` with no `function` wrapper; OpenAI wraps the whole thing in `{"type": "function", "function": {...}}`.
+- An assistant message that carries only tool calls should send `content: null`, not `""`.
+
 ## What pre-flight actually probes
 
 Tier assignment drives real behavior (see the design spec), so the probes must test the capability, not the claim.

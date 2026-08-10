@@ -6,9 +6,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.4.0-alpha.1] - 2026-08-10
+
+### Added
+- **Agentic screen capture.** Ask something that needs a visual answer — "what's this error?", "why does this look off?" — and the model reaches for the screen itself. It photographs what is in front of you, says what it looked at in the panel, and answers from the image. No extra configuration required: the model decides when a screenshot helps, provided it passed the *Agentic capture* check in Settings → Models.
+- **Focused capture by default.** Magi photographs the window in front of you rather than the whole display. A focused window fits the token budget at roughly 1.1×; a full ultra-wide desktop shrinks to 0.46× to fit — same token cost, about 2.4× the pixels per character. The model can ask for the active screen or every monitor when the task calls for it.
+- **Models that cannot call tools get screenshots too.** A model that sees but garbles tool syntax is never offered a tool — Magi reads your question instead, and when you say something like "what is this error" or "qué hay en esta pantalla" it attaches the screenshot before asking. It photographs the window in front for a question about a thing, and the whole display for a question about the screen. The capture log names the phrase that caused it, so nothing happens that you cannot account for
+- **Capture indicator in the panel.** The panel shows "Read <what>" while the model is working with a screenshot, so you can see when it happened and what it looked at.
+- **Settings → Screen now logs captures.** Before this release the list was always empty — there was nothing to capture. It fills in as the model works. Each entry shows what was captured, why, the pixel dimensions, and the visual-token cost.
+
+### Changed
+- macOS 14 (Sonoma) is now the minimum, up from macOS 11. Screen capture uses ScreenCaptureKit, Apple's current API: the one it replaces returns a picture of an empty desktop when permission is missing rather than reporting an error, which would mean a model answering confidently about a screen it never saw. ScreenCaptureKit's one-shot screenshot call arrives in macOS 14. Supporting 12.3 and 13 is possible through a longer streaming path and may come later — that would only lower the floor, never raise it again
+
 ## [0.3.0-alpha.1] - 2026-08-08
 
 ### Added
+- **Settings → Screen.** A new pane between Voice and Hotkeys shows whether Screen Recording permission has been granted, and will list everything Magi has looked at. Magi cannot read the screen yet — that arrives with agentic vision — so for now the list is always empty and says so. Each entry shows what was captured, why — either the model's own stated reason or the deictic phrase you said — along with the time, pixel dimensions, and the visual-token cost. The list is in memory only; it is never written to disk and is gone when Magi quits. A persisted record of which windows were open and when is a record of your working day, and a file of window titles next to `config.toml` would mean the config file is no longer safe to share in a bug report. The list holds the last 300 entries; oldest are dropped first. A **Clear** button removes the record of anything you would rather not keep. With nothing captured, the pane says plainly "Magi has not read your screen" rather than showing an empty table — the absence is the part worth stating
+- **Screen Recording permission row.** The Screen pane shows whether the permission is granted, with an explanation and a direct link to the right System Settings pane. If it is not granted, quitting and reopening Magi after granting it is required — macOS does not give a running process the permission retroactively
 - **Speak any language.** Magi detects it by default — Spanish, Portuguese, Japanese, about ninety-nine of them — and transcribes in the language you spoke rather than translating. Settings → Voice can pin one if you always use the same
 - **Language shortlist.** If auto-detection gets a short utterance wrong — two seconds of Spanish came back as French at p=0.18 — you can tell Magi which languages you actually speak. Settings → Voice shows a checkbox list: leave it empty to detect from all ninety-nine, tick one to pin it, or tick a few to restrict detection to your choices
 - **Talk to Magi.** Hold `Alt+Shift+Space`, say something, let go. It transcribes on your Mac and puts the words in the panel's input — you still decide whether to send them. Configurable, and separate from the panel shortcut so neither has to be timed
@@ -96,7 +110,8 @@ First build. The shell exists; there is nothing intelligent behind it yet.
 - Requires Accessibility permission for the global shortcut
 - Not signed or notarized — there is no downloadable build
 
-[Unreleased]: https://github.com/yanotoma/magi/compare/v0.3.0-alpha.1...HEAD
+[Unreleased]: https://github.com/yanotoma/magi/compare/v0.4.0-alpha.1...HEAD
+[0.4.0-alpha.1]: https://github.com/yanotoma/magi/compare/v0.3.0-alpha.1...v0.4.0-alpha.1
 [0.3.0-alpha.1]: https://github.com/yanotoma/magi/compare/v0.2.0-alpha.2...v0.3.0-alpha.1
 [0.2.0-alpha.2]: https://github.com/yanotoma/magi/compare/v0.2.0-alpha.1...v0.2.0-alpha.2
 [0.2.0-alpha.1]: https://github.com/yanotoma/magi/compare/v0.1.0-alpha.1...v0.2.0-alpha.1

@@ -54,13 +54,22 @@ export const failTurn = (message: string) => {
 };
 
 const commitStreamed = () => {
-  if (conversation.streaming) {
+  const content = conversation.streaming ?? "";
+  const thinking = conversation.thinking;
+
+  // Committed when there is *either* an answer or reasoning. The earlier
+  // `if (conversation.streaming)` treated `""` as nothing to keep, so a turn whose
+  // whole output went to the reasoning channel vanished — taking the reasoning with
+  // it, since that is only stored on the turn being pushed. To the user the reply
+  // simply never arrived and the panel looked stuck; asking again did the same thing.
+  if (content.trim() !== "" || thinking.trim() !== "") {
     conversation.turns.push({
       role: "assistant",
-      content: conversation.streaming,
-      thinking: conversation.thinking || undefined,
+      content: content.trim(),
+      thinking: thinking || undefined,
     });
   }
+
   conversation.streaming = null;
   conversation.thinking = "";
 };

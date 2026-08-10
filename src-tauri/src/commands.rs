@@ -85,6 +85,24 @@ pub struct AppState {
     /// in an editor and paste into bug reports.
     pub models_dir: PathBuf,
 
+    /// The screen. Behind the trait, so the tests that matter — which display was chosen,
+    /// how big the result is — need no display attached, and so a Linux build has something
+    /// to hold at all.
+    ///
+    /// `Arc` rather than `Box`, for the same reason as [`secrets`]: a capture is a
+    /// synchronous round trip through the window server and `CLAUDE.md` requires it on
+    /// `spawn_blocking`, which needs an owned handle to move into the closure.
+    ///
+    /// [`secrets`]: AppState::secrets
+    pub screen: Arc<dyn crate::capture::ScreenCapture>,
+
+    /// Every screenshot this run has taken, and why.
+    ///
+    /// `Arc` because the capture path records from a `spawn_blocking` worker while Settings
+    /// reads from a command, and neither should wait on the other for longer than a push
+    /// onto a queue. Deliberately not persisted — see `capture::log`.
+    pub capture_log: Arc<crate::capture::CaptureLog>,
+
     /// Set while a model download is running.
     ///
     /// Guards against a second download of the same file: two writers appending to one
@@ -215,6 +233,25 @@ pub struct VoiceView {
     pub microphone_settings_url: String,
     /// The model currently downloading, if any.
     pub downloading: Option<Model>,
+}
+
+/// Everything Settings shows about screen reading.
+///
+/// Same shape as the microphone rows in [`VoiceView`]: the state, what it means, and where
+/// to go about it. The permission and the log belong in one view because they answer two
+/// halves of the same question — *can* Magi read my screen, and *has* it.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CaptureView {
+    pub screen_recording: Permission,
+
+    /// What to tell the user, and what they can do about it.
+    pub screen_recording_explanation: String,
+
+    /// The System Settings deep link for the Screen Recording pane.
+    pub screen_recording_settings_url: String,
+
+    /// Every capture this run of Magi has made, most recent first.
+    pub entries: Vec<crate::capture::Entry>,
 }
 
 #[derive(Debug, Serialize)]
@@ -830,50 +867,137 @@ pub async fn send_text_turn(
             _ => Message::user(m.content),
         })
         .collect();
-    messages.push(Message::user(text));
+    // The Tier 2 path. A model that sees but malforms tool calls is never offered a tool,
+    // so Magi decides from the user's own words and attaches the screenshot before asking.
+    // By the time the model reads the question the image is already there and there is
+    // nothing for it to call — which is why `llm::prompt` tells this tier that an image
+    // *may* be attached and never mentions tools at all.
+    let attached = if tier == Tier::Heuristic {
+        heuristic_capture(&app, &text).await
+    } else {
+        Vec::new()
+    };
+
+    messages.push(if attached.is_empty() {
+        Message::user(text)
+    } else {
+        Message::user_seeing(text, attached)
+    });
 
     let request = TurnRequest {
         model,
         system: Some(system),
         messages,
         max_tokens: MAX_TOKENS,
+        // Offered to exactly one tier, matching what the system prompt says. A model
+        // that malforms tool syntax must not be handed a definition to malform, and one
+        // that cannot see has nothing to do with a screenshot.
+        tools: if tier.offers_capture_tool() {
+            vec![crate::llm::tools::capture_screen()]
+        } else {
+            Vec::new()
+        },
     };
 
     let provider = registry::build(state.http.clone(), &provider_config, api_key);
 
-    // A modest buffer, deliberately. If the UI falls behind, the provider should
-    // wait rather than let an unbounded queue grow between the model and the panel.
-    let (tx, mut rx) = mpsc::channel::<StreamEvent>(64);
-
     let task = tauri::async_runtime::spawn(async move {
-        // Forwarding runs alongside the request so tokens reach the panel as they
-        // arrive rather than after the answer is complete.
-        let forward = async {
-            while let Some(event) = rx.recv().await {
-                let emitted = match event {
-                    StreamEvent::Token(token) => app.emit("magi://token", token),
-                    // Always emitted; the panel decides whether to show it. The
-                    // channel is in-process, so the cost of sending it when it is
-                    // hidden is not worth a round trip to read a setting here.
-                    StreamEvent::Thinking(thought) => app.emit("magi://thinking", thought),
-                    StreamEvent::Done(reason) => app.emit("magi://turn-done", describe(&reason)),
-                };
-                if let Err(error) = emitted {
-                    tracing::warn!(%error, "could not emit a turn event");
-                    break;
+        let mut request = request;
+        // One budget for the whole turn, not per request: the point is to bound how many
+        // times a model can go round, and a fresh budget each iteration would bound
+        // nothing.
+        let mut budget = crate::llm::tools::CaptureBudget::new();
+
+        loop {
+            // A modest buffer, deliberately. If the UI falls behind, the provider should
+            // wait rather than let an unbounded queue grow between the model and the panel.
+            let (tx, mut rx) = mpsc::channel::<StreamEvent>(64);
+
+            let mut answer = String::new();
+            let mut calls = crate::llm::toolstream::ToolCallStream::new();
+            let mut stop = StopReason::EndTurn;
+
+            // Forwarding runs alongside the request so tokens reach the panel as they
+            // arrive rather than after the answer is complete.
+            let forward = async {
+                while let Some(event) = rx.recv().await {
+                    let emitted = match event {
+                        StreamEvent::Token(token) => {
+                            // Kept as well as forwarded. The assistant's turn has to be
+                            // replayed whole when a tool result follows it, and the panel
+                            // is not a place to read it back from.
+                            answer.push_str(&token);
+                            app.emit("magi://token", token)
+                        }
+                        // Always emitted; the panel decides whether to show it. The
+                        // channel is in-process, so the cost of sending it when it is
+                        // hidden is not worth a round trip to read a setting here.
+                        StreamEvent::Thinking(thought) => app.emit("magi://thinking", thought),
+                        // Consumed rather than forwarded: these are wire fragments, and
+                        // what the panel hears about is the capture that results.
+                        StreamEvent::ToolStart { index, id, name } => {
+                            calls.begin(index, &id, &name);
+                            Ok(())
+                        }
+                        StreamEvent::ToolArguments { index, json } => {
+                            calls.push_arguments(index, &json);
+                            Ok(())
+                        }
+                        // Held back. A turn that stopped to call a tool is not finished,
+                        // and telling the panel it was would end the answer mid-thought.
+                        StreamEvent::Done(reason) => {
+                            stop = reason;
+                            Ok(())
+                        }
+                    };
+                    if let Err(error) = emitted {
+                        tracing::warn!(%error, "could not emit a turn event");
+                        break;
+                    }
                 }
+            };
+
+            // Both halves run together so tokens reach the panel as they arrive
+            // rather than after the answer is complete.
+            let (result, ()) = tokio::join!(provider.turn(request.clone(), tx), forward);
+
+            if let Err(error) = result {
+                let message = error.to_string();
+                tracing::warn!(%message, "turn failed");
+                if let Err(error) = app.emit("magi://error", message) {
+                    tracing::warn!(%error, "could not emit the turn error");
+                }
+                return;
             }
-        };
 
-        // Both halves run together so tokens reach the panel as they arrive
-        // rather than after the answer is complete.
-        let (result, ()) = tokio::join!(provider.turn(request, tx), forward);
+            let calls = calls.finish();
+            if calls.is_empty() {
+                // The ordinary end of a turn. Also where a model that said
+                // `stop_reason: tool_use` and then named no call lands, which is a
+                // malformed response rather than a loop to continue.
+                if matches!(stop, StopReason::ToolUse) {
+                    tracing::warn!("the model stopped for a tool call and named none");
+                }
+                if let Err(error) = app.emit("magi://turn-done", describe(&stop)) {
+                    tracing::warn!(%error, "could not emit the turn completion");
+                }
+                return;
+            }
 
-        if let Err(error) = result {
-            let message = error.to_string();
-            tracing::warn!(%message, "turn failed");
-            if let Err(error) = app.emit("magi://error", message) {
-                tracing::warn!(%error, "could not emit the turn error");
+            // The assistant's turn goes back whole, prose and calls together. Dropping
+            // the calls and keeping the prose makes the results below reference calls
+            // that are no longer in the history, which both APIs reject.
+            request.messages.push(Message::Assistant {
+                text: std::mem::take(&mut answer),
+                calls: calls.clone(),
+            });
+
+            // One result per call, always. A call left unanswered is an error rather
+            // than a missing detail.
+            for call in &calls {
+                request
+                    .messages
+                    .push(answer_call(&app, call, &mut budget).await);
             }
         }
     });
@@ -918,7 +1042,216 @@ fn describe(reason: &StopReason) -> Option<String> {
     match reason {
         StopReason::EndTurn => None,
         StopReason::MaxTokens => Some("The reply hit the length limit.".to_string()),
+        // Only reachable when the loop ended on a tool stop with no call to run, which
+        // is a malformed response. Named rather than hidden: the user is looking at a
+        // reply that stops mid-thought and deserves to know why.
+        StopReason::ToolUse => {
+            Some("The model asked to use a tool and did not say which.".to_string())
+        }
         StopReason::Other(other) => Some(format!("The model stopped: {other}")),
+    }
+}
+
+/// Captures the screen when the user's words point at it, for the tier that cannot ask.
+///
+/// Returns an empty list when the words did not point at anything, when the capture failed,
+/// or when there is no screen — every one of which means "ask without an image" rather than
+/// "fail the turn". A Tier 2 model with no screenshot still answers from the conversation,
+/// which is what its system prompt tells it to do.
+async fn heuristic_capture(app: &tauri::AppHandle, text: &str) -> Vec<crate::llm::provider::Image> {
+    use tauri::Manager;
+
+    let Some(deixis) = crate::capture::asks_about_the_screen(text) else {
+        return Vec::new();
+    };
+
+    // The matched phrase chooses the target, which costs nothing because the phrase is
+    // already known: someone who said "this screen" meant the display, and someone who
+    // said "this error" meant the window they are looking at — which is also the sharper
+    // capture, so the common case is the good one.
+    let wants_whole_screen = deixis.phrase.contains("screen") || deixis.phrase.contains("pantalla");
+
+    let screen = Arc::clone(&app.state::<AppState>().screen);
+    let captured = tauri::async_runtime::spawn_blocking(move || {
+        if wants_whole_screen {
+            screen.capture_active_display()
+        } else {
+            screen.capture_focused_window()
+        }
+    })
+    .await;
+
+    let capture = match captured {
+        Ok(Ok(capture)) => capture,
+        Ok(Err(error)) => {
+            // Not surfaced to the user. They did not ask for a screenshot — they asked a
+            // question, and Magi guessed that a picture would help. A guess that failed
+            // should not become an error report about a feature they never invoked.
+            tracing::warn!(%error, phrase = %deixis.phrase, "the heuristic capture failed");
+            return Vec::new();
+        }
+        Err(error) => {
+            tracing::warn!(%error, "the heuristic capture task failed");
+            return Vec::new();
+        }
+    };
+
+    let state = app.state::<AppState>();
+    state.capture_log.record(crate::capture::Entry {
+        at: unix_millis(),
+        subject: capture.subject.clone(),
+        // The phrase that caused it, so the log can say "you said \"this error\"" rather
+        // than leaving the user to wonder what triggered a capture they did not request.
+        reason: crate::llm::tools::Reason::PhraseMatched {
+            phrase: deixis.phrase.clone(),
+            language: deixis.language.to_string(),
+        },
+        width: capture.width,
+        height: capture.height,
+        visual_tokens: capture.visual_tokens(),
+    });
+
+    if let Err(error) = app.emit("magi://captured", capture.subject.describe()) {
+        tracing::warn!(%error, "could not announce the capture");
+    }
+
+    vec![crate::llm::provider::Image {
+        media_type: "image/png",
+        bytes: capture.png,
+    }]
+}
+
+/// Runs one tool call and produces the message that answers it.
+///
+/// Never fails. Every outcome is a `ToolResult` the model can read, because the
+/// alternative — aborting the turn — loses an answer the model could still have given
+/// from what it already knows. A screenshot it could not get is a fact it can work with;
+/// silence is not.
+async fn answer_call(
+    app: &tauri::AppHandle,
+    call: &crate::llm::provider::ToolCall,
+    budget: &mut crate::llm::tools::CaptureBudget,
+) -> Message {
+    use tauri::Manager;
+
+    let refuse = |text: String| Message::ToolResult {
+        call_id: call.id.clone(),
+        text,
+        images: Vec::new(),
+    };
+
+    if call.name != crate::llm::tools::CAPTURE_SCREEN {
+        // Magi offers exactly one tool, so this is a model inventing a name — which one
+        // did, calling `users_screen`. Naming what was asked for beats a generic refusal:
+        // it is the difference between the model correcting itself and repeating itself.
+        tracing::warn!(name = %call.name, "the model called a tool that does not exist");
+        return refuse(format!(
+            "There is no tool called `{}`. The only tool available is `{}`.",
+            call.name,
+            crate::llm::tools::CAPTURE_SCREEN
+        ));
+    }
+
+    if !budget.has_room() {
+        return refuse(budget.exhausted_message());
+    }
+    budget.spend();
+
+    let reason = crate::llm::tools::Reason::from_tool_arguments(&call.arguments);
+    let target = crate::llm::tools::Target::from_tool_arguments(&call.arguments);
+
+    // `spawn_blocking`, because a capture is a synchronous round trip through the window
+    // server. Holding a runtime worker for it starves everything else that runtime polls.
+    let screen = Arc::clone(&app.state::<AppState>().screen);
+    let gathered = tauri::async_runtime::spawn_blocking(move || {
+        use crate::llm::tools::Target;
+
+        // The window list travels as text alongside the picture, and for some questions it
+        // *is* the answer. Asked what applications were open, a model was seen reading
+        // blurry pixels to recover names that were available exactly as strings — no
+        // resolution beats sending "Activity Monitor" as text. Cheap, precise, and it
+        // complements the image rather than competing with it.
+        let windows = screen.windows().unwrap_or_default();
+
+        let captures = match target {
+            Target::FocusedWindow => screen.capture_focused_window().map(|one| vec![one]),
+            Target::ActiveScreen => screen.capture_active_display().map(|one| vec![one]),
+            Target::AllScreens => screen.capture_all_displays(),
+        };
+
+        captures.map(|captures| (captures, windows))
+    })
+    .await
+    .map_err(|error| error.to_string())
+    .and_then(|result| result.map_err(|error| error.to_string()));
+
+    let (captures, windows) = match gathered {
+        Ok(gathered) => gathered,
+        Err(message) => {
+            tracing::warn!(%message, "the capture the model asked for failed");
+            // The model is told, in words it can act on. A permission problem is the
+            // likely one and it can say so to the user, which is more useful than Magi
+            // failing the turn behind its back.
+            return refuse(format!("The screenshot could not be taken: {message}"));
+        }
+    };
+
+    let state = app.state::<AppState>();
+    for capture in &captures {
+        state.capture_log.record(crate::capture::Entry {
+            at: unix_millis(),
+            subject: capture.subject.clone(),
+            reason: reason.clone(),
+            width: capture.width,
+            height: capture.height,
+            visual_tokens: capture.visual_tokens(),
+        });
+    }
+
+    // The panel shows that the screen was read. Emitted after the log entries exist, so
+    // opening Settings the moment the indicator appears never shows an empty list.
+    let announcement = captures
+        .iter()
+        .map(|capture| capture.subject.describe())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if let Err(error) = app.emit("magi://captured", announcement.clone()) {
+        tracing::warn!(%error, "could not announce the capture");
+    }
+
+    // Named windows, frontmost first, so "what have I got open" is answered from strings
+    // rather than from pixels. Capped because a busy desktop has dozens and the tail is
+    // background noise nobody asked about.
+    let listed = windows
+        .iter()
+        .take(20)
+        .map(|window| {
+            if window.title.is_empty() {
+                window.app.clone()
+            } else {
+                format!("{} — {}", window.app, window.title)
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mut text = format!("Screenshot of {announcement}.");
+    if !listed.is_empty() {
+        text.push_str("\n\nOpen windows, frontmost first:\n");
+        text.push_str(&listed.join("\n"));
+    }
+
+    Message::ToolResult {
+        call_id: call.id.clone(),
+        // Short and factual about the image. The model has it; describing it here would
+        // compete with what it can see for itself.
+        text,
+        images: captures
+            .into_iter()
+            .map(|capture| crate::llm::provider::Image {
+                media_type: "image/png",
+                bytes: capture.png,
+            })
+            .collect(),
     }
 }
 
@@ -1120,6 +1453,112 @@ pub fn remove_speech_model(state: State<'_, AppState>, model: Model) -> CommandR
     let _ = std::fs::remove_file(model.partial_path_in(&state.models_dir));
 
     get_voice(state)
+}
+
+/// What Magi can read, and what it has read.
+///
+/// Synchronous and cheap: the permission query is a CoreGraphics call with no round trip and
+/// the log is a clone of an in-memory queue. Nothing here touches the keychain, which is the
+/// thing that must never run on the main thread.
+#[tauri::command]
+pub fn get_capture(state: tauri::State<'_, AppState>) -> CommandResult<CaptureView> {
+    let screen_recording = permissions::screen_recording();
+
+    Ok(CaptureView {
+        screen_recording,
+        // A screen-specific explanation rather than `Permission::explanation`. The generic
+        // text says "turn it on in System Settings", which presumes Magi is listed there —
+        // and it is not until something has requested the permission. See
+        // `permissions::screen_reading_explanation`.
+        screen_recording_explanation: permissions::screen_reading_explanation(screen_recording),
+        screen_recording_settings_url: permissions::settings_url(PermissionKind::ScreenRecording)
+            .to_string(),
+        entries: state.capture_log.entries(),
+    })
+}
+
+/// Asks macOS for screen-recording access.
+///
+/// `async` and on `spawn_blocking` rather than a plain synchronous command, for the reason
+/// written into this project's hard rules: a synchronous `#[tauri::command] fn` runs on the
+/// main thread, and anything that may put system UI in front of the user must not. The
+/// keychain taught that lesson expensively — a call that reads like a cheap getter turned
+/// out to wait on a dialog only the main thread could have drawn, and the app deadlocked
+/// with no error anywhere. `CGRequestScreenCaptureAccess` is not documented to block, which
+/// is not the same as documented not to.
+///
+/// Called only from an explicit button. It opens System Settings as a side effect, which is
+/// welcome when someone asked for it and startling otherwise.
+#[tauri::command]
+pub async fn request_screen_recording(app: tauri::AppHandle) -> CommandResult<CaptureView> {
+    // The result is deliberately discarded. It reports the state as macOS sees it *now*,
+    // which is "denied" even on success — the user has yet to flick the switch. What matters
+    // is the side effect: Magi now exists in that list.
+    let _ = tauri::async_runtime::spawn_blocking(permissions::request_screen_recording).await;
+
+    use tauri::Manager;
+    get_capture(app.state::<AppState>())
+}
+
+/// Takes one screenshot, on purpose, so the user can see whether screen reading works.
+///
+/// The same idea as the pre-flight probes: find out before relying on it. Screen recording
+/// fails in ways that produce no error — a permission granted to an app that is already
+/// running does not take effect, and the API this replaced returned a picture of an empty
+/// desktop rather than complaining — so a button that says "it worked, and here is the size
+/// and what it would have cost" is worth more than a status badge.
+///
+/// The image itself is discarded. What is kept is the log entry, which is the evidence.
+/// Showing the screenshot back would mean holding a megabyte of someone's screen in a
+/// settings window for as long as it stayed open, to tell them something the dimensions
+/// already tell them.
+#[tauri::command]
+pub async fn test_capture(app: tauri::AppHandle) -> CommandResult<CaptureView> {
+    use tauri::Manager;
+
+    // `spawn_blocking`, not merely `async`. A capture is a synchronous round trip through
+    // the window server, and an async command runs on a runtime worker — holding one of
+    // those for the duration would starve everything else that runtime polls, which is the
+    // same reason transcription goes to the blocking pool.
+    let screen = Arc::clone(&app.state::<AppState>().screen);
+    let capture = tauri::async_runtime::spawn_blocking(move || screen.capture_active_display())
+        .await
+        .map_err(to_message)?
+        .map_err(to_message)?;
+
+    let state = app.state::<AppState>();
+    state.capture_log.record(crate::capture::Entry {
+        at: unix_millis(),
+        subject: capture.subject.clone(),
+        reason: crate::llm::tools::Reason::UserAsked,
+        width: capture.width,
+        height: capture.height,
+        visual_tokens: capture.visual_tokens(),
+    });
+
+    get_capture(state)
+}
+
+/// Now, in milliseconds since the Unix epoch.
+///
+/// Saturates at zero rather than propagating: a clock set before 1970 is not a reason to
+/// refuse a screenshot, and an entry timestamped zero is visibly wrong in a way a missing
+/// entry is not.
+fn unix_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_millis().min(u64::MAX as u128) as u64)
+        .unwrap_or(0)
+}
+
+/// Forgets every recorded capture.
+///
+/// Offered because someone who has just shown Magi something private should be able to
+/// remove the record of it without quitting the app.
+#[tauri::command]
+pub fn clear_capture_log(state: tauri::State<'_, AppState>) -> CommandResult<CaptureView> {
+    state.capture_log.clear();
+    get_capture(state)
 }
 
 /// Opens the System Settings pane for a permission.

@@ -16,3 +16,5 @@ pub mod prompt;
 pub mod provider;
 pub mod registry;
 pub mod sse;
+pub mod tools;
+pub mod toolstream;

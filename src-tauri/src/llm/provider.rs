@@ -13,24 +13,96 @@ pub enum Role {
     Assistant,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Message {
-    pub role: Role,
-    pub content: String,
+/// One message in a conversation.
+///
+/// An enum rather than a struct with optional fields, so the states that cannot
+/// exist cannot be written: a tool result with no call to answer, an assistant
+/// message carrying somebody else's tool call. The agentic loop assembles these in a
+/// fixed order and getting that order wrong is rejected by both APIs, so the type
+/// should refuse it first.
+///
+/// `PartialEq` but not `Eq`, because a [`ToolCall`]'s arguments are a
+/// `serde_json::Value` and JSON numbers are floats.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Message {
+    User {
+        text: String,
+
+        /// Screenshots attached to the question itself.
+        ///
+        /// The Tier 2 path, and the reason this is not only a tool-result concern. A model
+        /// that sees but cannot be trusted with tools is never told a tool exists, so Magi
+        /// decides from the user's words and attaches the image before asking — by which
+        /// point there is nothing for the model to call.
+        images: Vec<Image>,
+    },
+
+    /// What the model said, and any tools it asked for.
+    ///
+    /// The calls travel with the text because both families require the assistant's
+    /// turn to be replayed *whole* — dropping the tool-call part and keeping the prose
+    /// makes the following result reference a call that is no longer in the history,
+    /// which is an error rather than a degradation.
+    Assistant { text: String, calls: Vec<ToolCall> },
+
+    /// The answer to one tool call.
+    ///
+    /// `image` is the reason this is not simply text. Magi's one tool returns a
+    /// screenshot, and the two families disagree about where an image may appear in a
+    /// tool result — so the neutral type carries both parts and each provider decides
+    /// how to express them. That disagreement is exactly what the Provider trait is
+    /// for.
+    ToolResult {
+        call_id: String,
+        text: String,
+        /// Usually one, and none when the tool had nothing to show. Three when the model
+        /// asked for every monitor, which is why this is a list rather than an `Option`.
+        images: Vec<Image>,
+    },
 }
 
 impl Message {
-    pub fn user(content: impl Into<String>) -> Self {
-        Self {
-            role: Role::User,
-            content: content.into(),
+    pub fn user(text: impl Into<String>) -> Self {
+        Message::User {
+            text: text.into(),
+            images: Vec::new(),
         }
     }
 
-    pub fn assistant(content: impl Into<String>) -> Self {
-        Self {
-            role: Role::Assistant,
-            content: content.into(),
+    /// A question with screenshots attached.
+    pub fn user_seeing(text: impl Into<String>, images: Vec<Image>) -> Self {
+        Message::User {
+            text: text.into(),
+            images,
+        }
+    }
+
+    pub fn assistant(text: impl Into<String>) -> Self {
+        Message::Assistant {
+            text: text.into(),
+            calls: Vec::new(),
+        }
+    }
+
+    /// The role this message takes on the wire.
+    ///
+    /// A tool result is a `user` message in both families — Anthropic puts a
+    /// `tool_result` block in one, and the OpenAI family uses `role: "tool"`, which is
+    /// still the user's side of the exchange. Callers that only need "who is speaking"
+    /// get one answer instead of matching.
+    pub fn role(&self) -> Role {
+        match self {
+            Message::User { .. } | Message::ToolResult { .. } => Role::User,
+            Message::Assistant { .. } => Role::Assistant,
+        }
+    }
+
+    /// The text of this message, whatever kind it is.
+    pub fn text(&self) -> &str {
+        match self {
+            Message::User { text, .. }
+            | Message::Assistant { text, .. }
+            | Message::ToolResult { text, .. } => text,
         }
     }
 }
@@ -41,19 +113,31 @@ impl Message {
 /// shape both families can be mapped onto: Anthropic takes it as a top-level
 /// parameter, and the OpenAI family takes a `role: "system"` message. Modelling
 /// it as a message would bake in one family's choice.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TurnRequest {
     pub model: String,
     pub system: Option<String>,
     pub messages: Vec<Message>,
     /// Required by Anthropic, optional elsewhere, so always set.
     pub max_tokens: u32,
+
+    /// Tools the model may call, or empty to offer none.
+    ///
+    /// Empty for every tier but the agentic one. A model that malforms tool syntax
+    /// must not be handed a definition to malform — see `llm::prompt`, where the same
+    /// rule governs what the system prompt says.
+    pub tools: Vec<ToolSpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StopReason {
     EndTurn,
     MaxTokens,
+    /// The model stopped because it wants a tool run.
+    ///
+    /// Not a failure and not the end of the turn: the loop answers the call and asks
+    /// again. Anthropic calls this `tool_use` and the OpenAI family `tool_calls`.
+    ToolUse,
     Other(String),
 }
 
@@ -67,6 +151,24 @@ pub enum StreamEvent {
     /// displayable independently: merged, the user would read the working as
     /// though it were the conclusion. Not every model emits it.
     Thinking(String),
+
+    /// A tool call is starting, at `index` within this response.
+    ///
+    /// Consumed by the command layer rather than forwarded to the panel — these two
+    /// variants are wire-level fragments, and what the panel eventually hears about is
+    /// the capture that results. They live here so a provider's frame parser can stay a
+    /// pure function of one frame, with all the remembering in one place.
+    ToolStart {
+        index: usize,
+        id: String,
+        name: String,
+    },
+
+    /// More argument JSON for the call at `index`. Never valid JSON on its own.
+    ToolArguments {
+        index: usize,
+        json: String,
+    },
 
     Done(StopReason),
 }
@@ -104,6 +206,10 @@ pub enum LlmError {
 /// payload beside a `media_type` field. Encoding here would pick a side.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Image {
+    /// `&'static str` rather than `String`: every image Magi sends is a PNG, and both
+    /// the pre-flight probe and the screen capture produce one. A runtime value here
+    /// would invite a caller to invent a media type that no encoder in the crate can
+    /// actually produce.
     pub media_type: &'static str,
     pub bytes: Vec<u8>,
 }
@@ -136,6 +242,13 @@ pub struct ToolSpec {
 /// structurally valid call from prose that talks about calling something.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolCall {
+    /// The provider's handle for this call.
+    ///
+    /// Opaque, and required: both families match a result to its call by this string,
+    /// and a result carrying the wrong one — or none — is an error rather than a
+    /// degraded answer. Empty only where nothing will answer the call, which is the
+    /// pre-flight probe: it checks that a call is well formed and never runs it.
+    pub id: String,
     pub name: String,
     pub arguments: serde_json::Value,
 }
@@ -353,6 +466,7 @@ mod tests {
             system: Some("be brief".into()),
             messages: vec![Message::user("hello")],
             max_tokens: 1024,
+            tools: Vec::new(),
         }
     }
 
@@ -364,7 +478,7 @@ mod tests {
         // dictating the shape of the other.
         let request = a_request();
         assert_eq!(request.messages.len(), 1);
-        assert_eq!(request.messages[0].role, Role::User);
+        assert_eq!(request.messages[0].role(), Role::User);
     }
 
     #[tokio::test]
@@ -389,6 +503,8 @@ mod tests {
                 // Reasoning is collected separately; a test that folded it into
                 // `tokens` would pass while the panel mixed the two.
                 StreamEvent::Thinking(_) => {}
+                // Wire fragments, consumed by the command layer rather than the panel.
+                StreamEvent::ToolStart { .. } | StreamEvent::ToolArguments { .. } => {}
                 StreamEvent::Done(_) => finished = true,
             }
         }

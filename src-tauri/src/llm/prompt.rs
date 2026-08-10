@@ -23,6 +23,26 @@ You are Magi, a desktop assistant. Your answer appears in a small overlay panel,
 so be brief and lead with the answer. Skip preamble and restatement. Use plain \
 prose; reach for a short list only when the answer really is a list.";
 
+/// Which machine the user is sitting at.
+///
+/// Absent at first, and the omission showed: asked what applications were open, a
+/// model answered "usa el administrador de tareas (Ctrl+Shift+Esc en Windows)" to
+/// someone on a Mac. Nothing in the prompt said otherwise, so the model guessed the
+/// most common desktop and guessed wrong.
+///
+/// From `cfg!` rather than a literal, so it stays true rather than becoming a stale
+/// claim on the day Magi runs somewhere else.
+const fn platform() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "The user is on a Mac. Give macOS instructions — its key names, its menus, \
+         its applications — and never Windows or Linux ones."
+    } else if cfg!(target_os = "windows") {
+        "The user is on Windows. Give Windows instructions, not macOS or Linux ones."
+    } else {
+        "The user is on Linux. Give Linux instructions, not macOS or Windows ones."
+    }
+}
+
 /// Tier 1. The model is told the tool exists and when to reach for it.
 ///
 /// The guidance on *when* matters as much as the tool's existence. Without it a
@@ -62,12 +82,37 @@ You cannot see the user's screen and have no way to look at it. If a question \
 depends on what is displayed, say so plainly and ask them to paste the relevant \
 text or error message.";
 
+/// Whether Magi can actually perform a capture during a turn yet.
+///
+/// **True now.** It was false for one release's worth of commits, and the reason is worth
+/// keeping: told it could call `capture_screen` while nothing executed the call, a Tier 1
+/// model did not fail — it **invented the screenshot**, verbatim in its own reasoning:
+///
+/// ```text
+/// [Capture_screen tool called. Assuming the screenshot shows a word processor
+///  like Microsoft Word or Google Docs.]
+/// ```
+///
+/// The user had a terminal open. A model's tier says what the *model* can do; this says
+/// what *Magi* can do with it, and the prompt must reflect the smaller of the two. Set it
+/// back to `false` if the loop is ever taken out again, rather than leaving the promise
+/// standing.
+const CAPTURE_IS_WIRED: bool = true;
+
 /// The capture clause for a tier.
 ///
 /// [`Tier::Unreachable`] gets the tier 3 clause. Nothing is known about an
 /// unreachable model, and the safe assumption is the one that cannot lead the
 /// model to promise something it cannot do.
+///
+/// Every tier gets that same clause while [`CAPTURE_IS_WIRED`] is false. A model's
+/// tier says what the *model* can do; this says what *Magi* can do with it, and the
+/// prompt has to reflect the smaller of the two.
 fn capture_clause(tier: Tier) -> &'static str {
+    if !CAPTURE_IS_WIRED {
+        return NO_CAPTURE;
+    }
+
     match tier {
         Tier::Agentic => AGENTIC_CAPTURE,
         Tier::Heuristic => HEURISTIC_CAPTURE,
@@ -88,6 +133,8 @@ fn capture_clause(tier: Tier) -> &'static str {
 pub fn system_prompt(tier: Tier, context: &str) -> String {
     let mut prompt = String::with_capacity(IDENTITY.len() + 512);
     prompt.push_str(IDENTITY);
+    prompt.push_str("\n\n");
+    prompt.push_str(platform());
     prompt.push_str("\n\n");
     prompt.push_str(capture_clause(tier));
 
@@ -122,10 +169,31 @@ mod tests {
     }
 
     #[test]
+    fn every_tier_says_which_machine_the_user_is_on() {
+        // Without it a model gives advice for the wrong desktop. Observed: asked what
+        // applications were open, it answered with the Windows Task Manager shortcut to
+        // someone on a Mac. It was not being careless — nothing had told it.
+        for tier in EVERY_TIER {
+            let prompt = system_prompt(tier, "");
+            assert!(
+                prompt.contains("The user is on"),
+                "{tier:?} does not say what platform the user is on"
+            );
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let prompt = system_prompt(Tier::Agentic, "");
+            assert!(prompt.contains("on a Mac"), "{prompt}");
+            assert!(prompt.contains("never Windows"), "{prompt}");
+        }
+    }
+
+    #[test]
     fn only_the_agentic_tier_names_the_tool() {
-        // The load-bearing assertion of this module. Naming a tool to tier 2 makes
-        // it write malformed tool syntax into prose; naming it to tier 3 makes a
-        // blind model offer to look at the screen.
+        // The load-bearing assertion of this module, and live again now that the loop
+        // exists. Naming a tool to tier 2 makes it write malformed tool syntax into
+        // prose; naming it to tier 3 makes a blind model offer to look at the screen.
         for tier in EVERY_TIER {
             let prompt = system_prompt(tier, "");
             let names_tool = prompt.contains("capture_screen");
@@ -138,11 +206,23 @@ mod tests {
     }
 
     #[test]
+    fn only_the_agentic_clause_names_the_tool() {
+        // The load-bearing assertion of this module, checked against the clauses
+        // themselves rather than the assembled prompt, so it keeps guarding the
+        // wording while `CAPTURE_IS_WIRED` is false. Naming a tool to tier 2 makes it
+        // write malformed tool syntax into prose; naming it to tier 3 makes a blind
+        // model offer to look at the screen.
+        assert!(AGENTIC_CAPTURE.contains("capture_screen"));
+        assert!(!HEURISTIC_CAPTURE.contains("capture_screen"));
+        assert!(!NO_CAPTURE.contains("capture_screen"));
+    }
+
+    #[test]
     fn the_heuristic_tier_never_mentions_tools_at_all() {
         // Stronger than the assertion above: not the tool's name, not the word
         // "tool", not "call". The concept has to be absent, because a model that
         // malforms tool calls will reach for the syntax if the idea is introduced.
-        let prompt = system_prompt(Tier::Heuristic, "");
+        let prompt = HEURISTIC_CAPTURE;
         for forbidden in ["tool", "Tool", "call it", "calling"] {
             assert!(
                 !prompt.contains(forbidden),
@@ -156,9 +236,8 @@ mod tests {
     fn the_heuristic_tier_still_expects_an_image() {
         // It must know an attached screenshot is to be used, since Magi attaches
         // one without being asked.
-        let prompt = system_prompt(Tier::Heuristic, "");
-        assert!(prompt.contains("screenshot"));
-        assert!(prompt.contains("attached"));
+        assert!(HEURISTIC_CAPTURE.contains("screenshot"));
+        assert!(HEURISTIC_CAPTURE.contains("attached"));
     }
 
     #[test]
@@ -239,10 +318,7 @@ mod tests {
         // They both send images, which makes it tempting to share one prompt. They
         // must not: the difference in tool wording is the whole reason the tiers
         // are separate.
-        assert_ne!(
-            system_prompt(Tier::Agentic, ""),
-            system_prompt(Tier::Heuristic, "")
-        );
+        assert_ne!(AGENTIC_CAPTURE, HEURISTIC_CAPTURE);
     }
 
     #[test]
@@ -250,11 +326,10 @@ mod tests {
         // Describing the screenshot back is the most common failure with a vision
         // model in this shape of app: the user is looking at the screen already,
         // so a description is pure noise ahead of the answer.
-        for tier in [Tier::Agentic, Tier::Heuristic] {
+        for clause in [AGENTIC_CAPTURE, HEURISTIC_CAPTURE] {
             assert!(
-                system_prompt(tier, "").contains("do not describe")
-                    || system_prompt(tier, "").contains("Never describe"),
-                "{tier:?} must tell the model not to narrate what it sees"
+                clause.contains("do not describe") || clause.contains("Never describe"),
+                "a vision clause must tell the model not to narrate what it sees: {clause}"
             );
         }
     }

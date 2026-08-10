@@ -1,6 +1,6 @@
 [package]
 name = "magi"
-version = "0.3.0-alpha.1"
+version = "0.4.0-alpha.1"
 description = "A background AI agent for your desktop"
 authors = ["The Magi contributors"]
 license = "Apache-2.0"
@@ -93,6 +93,61 @@ whisper-rs = { version = "0.16", features = ["metal"] }
 objc2-av-foundation = { version = "0.3", default-features = false, features = [
   "AVCaptureDevice",
   "AVMediaFormat",
+] }
+# Reads screen-recording authorisation without prompting, via
+# CGPreflightScreenCaptureAccess. Already in Cargo.lock as a transitive dependency of
+# the objc2 family, so this makes an existing crate directly usable rather than adding
+# a new one to the tree.
+#
+# Note what is NOT used from it: CGWindowListCreateImage and
+# CGWindowListCreateImageFromArray carry `obsoleted=15.0` in the SDK header with the
+# message "Please use ScreenCaptureKit instead." The preflight and request functions
+# are plain `API_AVAILABLE(macos(10.15))` with no deprecation, so they are safe.
+# The objc2 runtime and the three companion crates the capture code names directly.
+# All four were already in the tree as transitive dependencies of the crates above;
+# listing them makes the imports legal rather than adding anything to the build.
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = [
+  "std",
+  "NSArray",
+  "NSError",
+  "NSString",
+] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = [
+  "std",
+  "CFData",
+] }
+
+# Screen capture. ScreenCaptureKit rather than the CGWindow path every other crate
+# still uses: that one is marked `obsoleted=15.0` with "Please use ScreenCaptureKit
+# instead", and — measured — it returns a picture of an empty desktop instead of an
+# error when permission is missing, which reaches a model as a screen it never saw.
+#
+# This is why bundle.macOS.minimumSystemVersion is 14.0: ScreenCaptureKit starts at
+# 12.3, but `SCScreenshotManager.captureImageWithFilter` — the only one-shot
+# screenshot call, as opposed to a video stream stopped after one frame — arrives in
+# 14. See .claude/skills/screen-capture/SKILL.md.
+objc2-screen-capture-kit = { version = "0.3", default-features = false, features = [
+  "SCScreenshotManager",
+  "SCShareableContent",
+  "SCStream",
+  "SCError",
+  "block2",
+  "std",
+  "objc2-core-graphics",
+  # `SCWindow::frame` and `SCDisplay::frame` return CGRect, which lives here.
+  "objc2-core-foundation",
+] }
+objc2-core-graphics = { version = "0.3", default-features = false, features = [
+  "CGWindow",
+  # Unpacking the CGImage ScreenCaptureKit hands back: its dimensions, its row
+  # stride, and the CFData holding the pixels.
+  "CGImage",
+  "CGDataProvider",
+  # The display's real pixel size, for reporting a scale factor honestly. Not used
+  # to size the capture — see `capture::screen`.
+  "CGDirectDisplay",
 ] }
 
 [dev-dependencies]

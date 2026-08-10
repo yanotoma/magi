@@ -15,8 +15,8 @@ use tokio::sync::mpsc;
 use base64::Engine as _;
 
 use crate::llm::provider::{
-    LlmError, ProbeReply, ProbeRequest, Provider, Role, StopReason, StreamEvent, ToolCall,
-    TurnRequest,
+    Image, LlmError, Message, ProbeReply, ProbeRequest, Provider, StopReason, StreamEvent,
+    ToolCall, TurnRequest,
 };
 use crate::llm::sse::{SseFrame, SseParser};
 
@@ -39,22 +39,221 @@ pub fn build_request(request: &TurnRequest) -> serde_json::Value {
     }
 
     for message in &request.messages {
-        messages.push(json!({
-            "role": match message.role {
-                Role::User => "user",
-                Role::Assistant => "assistant",
-            },
-            "content": message.content,
-        }));
+        push_message(&mut messages, message);
     }
 
-    json!({
+    let mut body = json!({
         "model": request.model,
         "messages": messages,
         "stream": true,
         // Optional here, required by Anthropic, so Magi always sends it.
         "max_tokens": request.max_tokens,
-    })
+    });
+
+    if !request.tools.is_empty() {
+        body["tools"] = json!(request
+            .tools
+            .iter()
+            .map(|tool| json!({
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.parameters,
+                }
+            }))
+            .collect::<Vec<_>>());
+        // "auto" rather than forcing the call. The model deciding *when* to look is the
+        // whole design; forcing it would make every turn pay for an image.
+        body["tool_choice"] = json!("auto");
+    }
+
+    body
+}
+
+/// Appends one neutral message to this family's `messages` array.
+///
+/// Appends rather than returns, because one neutral message can become **two** wire
+/// messages. A tool result carrying a screenshot is the case: this family's
+/// `role: "tool"` message takes text only, so the image cannot ride along inside it
+/// and follows as a `user` message with an `image_url` part. Anthropic has no such
+/// split — it puts the image inside the tool result — which is precisely the kind of
+/// divergence the neutral types exist to absorb.
+fn push_message(messages: &mut Vec<serde_json::Value>, message: &Message) {
+    match message {
+        Message::User { text, images } if images.is_empty() => {
+            messages.push(json!({ "role": "user", "content": text }));
+        }
+
+        Message::User { text, images } => {
+            // An array of parts once there is an image. The text stays first: both
+            // families accept either order, and text-first is the documented convention.
+            let mut content = vec![json!({ "type": "text", "text": text })];
+            content.extend(images.iter().map(|image| {
+                json!({
+                    "type": "image_url",
+                    "image_url": { "url": data_url(image) },
+                })
+            }));
+            messages.push(json!({ "role": "user", "content": content }));
+        }
+
+        Message::Assistant { text, calls } if calls.is_empty() => {
+            messages.push(json!({ "role": "assistant", "content": text }));
+        }
+
+        Message::Assistant { text, calls } => {
+            messages.push(json!({
+                "role": "assistant",
+                // Null rather than an empty string when the model said nothing but
+                // called a tool. Some endpoints in this family reject `""` alongside
+                // `tool_calls`, and null is what OpenAI's own responses contain.
+                "content": if text.is_empty() { serde_json::Value::Null } else { json!(text) },
+                "tool_calls": calls
+                    .iter()
+                    .map(|call| json!({
+                        "id": call.id,
+                        "type": "function",
+                        "function": {
+                            "name": call.name,
+                            // A *string* of JSON, not JSON. This family nests the
+                            // arguments as an encoded string on the way out as well as
+                            // on the way in.
+                            "arguments": call.arguments.to_string(),
+                        }
+                    }))
+                    .collect::<Vec<_>>(),
+            }));
+        }
+
+        Message::ToolResult {
+            call_id,
+            text,
+            images,
+        } => {
+            messages.push(json!({
+                "role": "tool",
+                "tool_call_id": call_id,
+                "content": text,
+            }));
+
+            if !images.is_empty() {
+                // All of them in one message rather than one message each: they answer a
+                // single question and splitting them would invite the model to treat the
+                // later ones as a new turn.
+                messages.push(json!({
+                    "role": "user",
+                    "content": images
+                        .iter()
+                        .map(|image| json!({
+                            "type": "image_url",
+                            "image_url": { "url": data_url(image) },
+                        }))
+                        .collect::<Vec<_>>(),
+                }));
+            }
+        }
+    }
+}
+
+/// An image as this family wants it: a `data:` URL with base64 payload.
+fn data_url(image: &Image) -> String {
+    use base64::Engine;
+    format!(
+        "data:{};base64,{}",
+        image.media_type,
+        base64::engine::general_purpose::STANDARD.encode(&image.bytes)
+    )
+}
+
+/// Everything one frame means, in order.
+///
+/// **The only function the stream loop calls.** It exists because the alternative did
+/// not work: `parse_tool_calls` was written, tested directly, and never wired into the
+/// loop, so every tool call was parsed perfectly in the test suite and dropped in
+/// production. Four hundred tests passed and the feature was dead. One entry point makes
+/// that particular mistake unavailable.
+///
+/// Tool fragments come after the text of the same frame, which is the order they occur in
+/// — a chunk carrying both is a model that said something and then reached for a tool.
+pub fn parse_events(frame: &SseFrame) -> Vec<StreamEvent> {
+    let mut events = Vec::new();
+    if let Some(event) = parse_frame(frame) {
+        events.push(event);
+    }
+    events.extend(parse_tool_calls(frame));
+    events
+}
+
+/// Tool-call fragments in one frame, if any.
+///
+/// Separate from [`parse_frame`] because the arities differ, not for tidiness: a frame
+/// carries at most one piece of text and may carry fragments for **several** tool calls
+/// at once — `delta.tool_calls` is an array and its entries can have different indices
+/// in a single chunk, which is how this family streams parallel calls. Folding both into
+/// one function would mean returning a `Vec` for the text case too, where it is always
+/// zero or one.
+pub fn parse_tool_calls(frame: &SseFrame) -> Vec<StreamEvent> {
+    let data = frame.data.trim();
+    if data.is_empty() || data == "[DONE]" {
+        return Vec::new();
+    }
+
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) else {
+        return Vec::new();
+    };
+
+    let Some(calls) = parsed
+        .get("choices")
+        .and_then(|c| c.as_array())
+        .and_then(|c| c.first())
+        .and_then(|c| c.get("delta"))
+        .and_then(|d| d.get("tool_calls"))
+        .and_then(|t| t.as_array())
+    else {
+        return Vec::new();
+    };
+
+    let mut events = Vec::new();
+    for call in calls {
+        // Defaults to 0 rather than skipping. A single call with the index omitted is
+        // the shape some OpenAI-compatible servers produce, and dropping it would lose
+        // the call entirely.
+        let index = call.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+
+        // `id` and `name` arrive on the first fragment and are `null` afterwards, which
+        // is why the accumulator is told never to overwrite a known value with an empty
+        // one. Read as empty strings here so the same call can carry both a start and
+        // an argument fragment.
+        let id = call.get("id").and_then(|i| i.as_str()).unwrap_or_default();
+        let name = call
+            .get("function")
+            .and_then(|f| f.get("name"))
+            .and_then(|n| n.as_str())
+            .unwrap_or_default();
+
+        if !id.is_empty() || !name.is_empty() {
+            events.push(StreamEvent::ToolStart {
+                index,
+                id: id.to_string(),
+                name: name.to_string(),
+            });
+        }
+
+        if let Some(arguments) = call
+            .get("function")
+            .and_then(|f| f.get("arguments"))
+            .and_then(|a| a.as_str())
+            .filter(|a| !a.is_empty())
+        {
+            events.push(StreamEvent::ToolArguments {
+                index,
+                json: arguments.to_string(),
+            });
+        }
+    }
+
+    events
 }
 
 /// Turns one SSE frame into an event, or `None` for frames with nothing to say.
@@ -104,6 +303,8 @@ pub fn parse_frame(frame: &SseFrame) -> Option<StreamEvent> {
     match choice.get("finish_reason").and_then(|r| r.as_str()) {
         Some("stop") => Some(StreamEvent::Done(StopReason::EndTurn)),
         Some("length") => Some(StreamEvent::Done(StopReason::MaxTokens)),
+        // Not the end of the turn: the loop answers the call and asks again.
+        Some("tool_calls") => Some(StreamEvent::Done(StopReason::ToolUse)),
         // Providers invent their own reasons. Folding an unknown one into
         // EndTurn would report a filtered or errored turn as a clean finish.
         Some(other) => Some(StreamEvent::Done(StopReason::Other(other.to_string()))),
@@ -247,7 +448,17 @@ pub fn parse_probe_reply(url: &str, body: &str) -> Result<ProbeReply, LlmError> 
                         serde_json::from_str(raw).ok()?
                     };
 
-                    Some(ToolCall { name, arguments })
+                    Some(ToolCall {
+                        // The probe only checks that a call is well formed and never
+                        // answers one, so the id is read if present and not required.
+                        id: call
+                            .get("id")
+                            .and_then(|id| id.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        name,
+                        arguments,
+                    })
                 })
                 .collect()
         })
@@ -341,7 +552,7 @@ impl Provider for OpenAiCompatible {
             })?;
 
             for frame in parser.push(&chunk) {
-                if let Some(event) = parse_frame(&frame) {
+                for event in parse_events(&frame) {
                     // A closed receiver means the user dismissed the panel. Stop,
                     // and let the request drop — this is cancellation, not failure.
                     if events.send(event).await.is_err() {
@@ -353,7 +564,7 @@ impl Provider for OpenAiCompatible {
 
         // Servers that close without [DONE] still owe us their last frame.
         for frame in parser.finish() {
-            if let Some(event) = parse_frame(&frame) {
+            for event in parse_events(&frame) {
                 if events.send(event).await.is_err() {
                     return Ok(());
                 }
@@ -390,6 +601,260 @@ impl Provider for OpenAiCompatible {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_question_with_a_screenshot_becomes_content_parts() {
+        // The Tier 2 shape: the image rides on the user's own question, because that tier
+        // is never told a tool exists and the capture has already happened by the time it
+        // reads anything.
+        let body = build_request(&with_messages(vec![Message::user_seeing(
+            "what is this error",
+            vec![a_screenshot()],
+        )]));
+
+        let content = body["messages"][0]["content"].as_array().expect("parts");
+        assert_eq!(content[0]["type"], "text", "text comes first");
+        assert_eq!(content[0]["text"], "what is this error");
+        assert_eq!(content[1]["type"], "image_url");
+        assert!(content[1]["image_url"]["url"]
+            .as_str()
+            .expect("a data URL")
+            .starts_with("data:image/png;base64,"));
+    }
+
+    #[test]
+    fn a_question_without_a_screenshot_stays_a_plain_string() {
+        // Most turns. An array of one text part is accepted everywhere and a plain string
+        // is what every endpoint in this family has always taken, so the common case does
+        // not change shape because a rarer one exists.
+        let body = build_request(&with_messages(vec![Message::user("hello")]));
+        assert!(body["messages"][0]["content"].is_string(), "{body}");
+    }
+
+    #[test]
+    fn the_stream_entry_point_covers_tool_calls_as_well_as_text() {
+        // The guard for the mistake that shipped: a tool parser written, tested, and
+        // never called by the loop. Anything the loop reads must come through here.
+        let events = parse_events(&frame(
+            r#"{"choices":[{"delta":{"content":"Looking.","tool_calls":[
+                {"index":0,"id":"call_1","function":{"name":"capture_screen","arguments":"{}"}}
+            ]}}]}"#,
+        ));
+
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, StreamEvent::Token(_))),
+            "text was lost: {events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, StreamEvent::ToolStart { .. })),
+            "the tool call was lost: {events:?}"
+        );
+    }
+
+    #[test]
+    fn a_streamed_tool_call_reassembles_from_the_documented_chunks() {
+        // The fragments are OpenAI's own, from the function-calling guide: `id` and
+        // `name` on the first only, `null` after, and arguments in pieces that are each
+        // invalid JSON.
+        let chunks = [
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_Ddm","type":"function","function":{"name":"capture_screen","arguments":""}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":null,"function":{"arguments":"{\"","name":null}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"reason"}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\":\""}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"the error"}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"}"}}]}}]}"#,
+        ];
+
+        let mut stream = crate::llm::toolstream::ToolCallStream::new();
+        for chunk in chunks {
+            for event in parse_tool_calls(&frame(chunk)) {
+                match event {
+                    StreamEvent::ToolStart { index, id, name } => stream.begin(index, &id, &name),
+                    StreamEvent::ToolArguments { index, json } => {
+                        stream.push_arguments(index, &json)
+                    }
+                    other => panic!("unexpected {other:?}"),
+                }
+            }
+        }
+
+        let calls = stream.finish();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "call_Ddm");
+        assert_eq!(calls[0].name, "capture_screen");
+        assert_eq!(calls[0].arguments["reason"], "the error");
+    }
+
+    #[test]
+    fn a_null_name_does_not_start_a_second_call() {
+        // The later chunks carry `"name": null`. Read as an empty string, they must not
+        // produce a start event that could overwrite the real name with nothing.
+        let events = parse_tool_calls(&frame(
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":null,"function":{"arguments":"x","name":null}}]}}]}"#,
+        ));
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert!(matches!(events[0], StreamEvent::ToolArguments { .. }));
+    }
+
+    #[test]
+    fn two_calls_in_one_chunk_are_kept_apart() {
+        // This family streams parallel calls as several entries in one array, and their
+        // indices are the only thing separating the two argument strings.
+        let events = parse_tool_calls(&frame(
+            r#"{"choices":[{"delta":{"tool_calls":[
+                {"index":0,"id":"a","function":{"name":"capture_screen","arguments":"{}"}},
+                {"index":1,"id":"b","function":{"name":"capture_screen","arguments":"{}"}}
+            ]}}]}"#,
+        ));
+        let indices: Vec<usize> = events
+            .iter()
+            .filter_map(|event| match event {
+                StreamEvent::ToolStart { index, .. } => Some(*index),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(indices, [0, 1]);
+    }
+
+    #[test]
+    fn a_tool_finish_reason_is_not_the_end_of_the_turn() {
+        assert_eq!(
+            parse_frame(&frame(
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#
+            )),
+            Some(StreamEvent::Done(StopReason::ToolUse))
+        );
+    }
+
+    #[test]
+    fn frames_without_tool_calls_produce_nothing() {
+        assert!(parse_tool_calls(&frame(r#"{"choices":[{"delta":{"content":"hi"}}]}"#)).is_empty());
+        assert!(parse_tool_calls(&frame("[DONE]")).is_empty());
+        assert!(parse_tool_calls(&frame("{not json")).is_empty());
+    }
+
+    fn a_screenshot() -> Image {
+        Image {
+            media_type: "image/png",
+            bytes: vec![0x89, 0x50, 0x4E, 0x47],
+        }
+    }
+
+    fn a_call() -> ToolCall {
+        ToolCall {
+            id: "call_1".to_string(),
+            name: "capture_screen".to_string(),
+            arguments: serde_json::json!({ "reason": "read the error" }),
+        }
+    }
+
+    fn with_messages(messages: Vec<Message>) -> TurnRequest {
+        TurnRequest {
+            model: "m".to_string(),
+            system: None,
+            messages,
+            max_tokens: 100,
+            tools: vec![crate::llm::tools::capture_screen()],
+        }
+    }
+
+    #[test]
+    fn a_tool_definition_is_nested_under_a_function_key() {
+        // This family wraps the schema; Anthropic does not. Getting it wrong is a 400
+        // that reads as though the tool itself is malformed.
+        let body = build_request(&with_messages(vec![Message::user("hi")]));
+        let tool = &body["tools"][0];
+        assert_eq!(tool["type"], "function");
+        assert_eq!(tool["function"]["name"], "capture_screen");
+        assert_eq!(tool["function"]["parameters"]["type"], "object");
+        assert_eq!(body["tool_choice"], "auto");
+    }
+
+    #[test]
+    fn no_tools_means_no_tools_key_at_all() {
+        // An empty array is not the same as absence for every endpoint in this family,
+        // and a tier that must not see tools must not see the key either.
+        let mut request = with_messages(vec![Message::user("hi")]);
+        request.tools.clear();
+        let body = build_request(&request);
+        assert!(body.get("tools").is_none(), "{body}");
+        assert!(body.get("tool_choice").is_none(), "{body}");
+    }
+
+    #[test]
+    fn tool_call_arguments_go_out_as_an_encoded_string() {
+        // The one shape most likely to be got wrong: this family nests the arguments as
+        // a JSON *string* in both directions, while Anthropic sends an object.
+        let body = build_request(&with_messages(vec![Message::Assistant {
+            text: String::new(),
+            calls: vec![a_call()],
+        }]));
+        let call = &body["messages"][0]["tool_calls"][0];
+        assert_eq!(call["id"], "call_1");
+        assert_eq!(call["type"], "function");
+        let arguments = call["function"]["arguments"]
+            .as_str()
+            .expect("arguments must be a string, not an object");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(arguments).expect("valid JSON inside"),
+            serde_json::json!({ "reason": "read the error" })
+        );
+    }
+
+    #[test]
+    fn an_assistant_that_only_called_a_tool_sends_null_content() {
+        // Some endpoints in this family reject `""` alongside `tool_calls`, and null is
+        // what OpenAI's own responses contain.
+        let body = build_request(&with_messages(vec![Message::Assistant {
+            text: String::new(),
+            calls: vec![a_call()],
+        }]));
+        assert!(body["messages"][0]["content"].is_null(), "{body}");
+    }
+
+    #[test]
+    fn a_screenshot_follows_the_tool_result_as_a_user_message() {
+        // The divergence that shapes the neutral type. This family's tool messages
+        // support text only — "For tool messages, only type `text` is supported" — so an
+        // image cannot ride inside the result and follows it instead. One neutral
+        // message therefore becomes two wire messages.
+        let body = build_request(&with_messages(vec![Message::ToolResult {
+            call_id: "call_1".to_string(),
+            text: "Screenshot captured.".to_string(),
+            images: vec![a_screenshot()],
+        }]));
+
+        let messages = body["messages"].as_array().expect("array");
+        assert_eq!(messages.len(), 2, "expected a result then an image: {body}");
+
+        assert_eq!(messages[0]["role"], "tool");
+        assert_eq!(messages[0]["tool_call_id"], "call_1");
+        assert!(
+            messages[0]["content"].is_string(),
+            "a tool message may only carry text"
+        );
+
+        assert_eq!(messages[1]["role"], "user");
+        let url = messages[1]["content"][0]["image_url"]["url"]
+            .as_str()
+            .expect("a data URL");
+        assert!(url.starts_with("data:image/png;base64,"), "{url}");
+        assert!(!url.contains('\n'), "the payload must not be wrapped");
+    }
+
+    #[test]
+    fn a_tool_result_without_an_image_stays_one_message() {
+        let body = build_request(&with_messages(vec![Message::ToolResult {
+            call_id: "call_1".to_string(),
+            text: "no screenshot".to_string(),
+            images: Vec::new(),
+        }]));
+        assert_eq!(body["messages"].as_array().expect("array").len(), 1);
+    }
     use crate::llm::provider::{Message, TurnRequest};
 
     fn a_request() -> TurnRequest {
@@ -398,6 +863,7 @@ mod tests {
             system: Some("be brief".into()),
             messages: vec![Message::user("hello")],
             max_tokens: 1024,
+            tools: Vec::new(),
         }
     }
 

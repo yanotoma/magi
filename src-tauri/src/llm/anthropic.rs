@@ -15,8 +15,8 @@ use tokio::sync::mpsc;
 use base64::Engine as _;
 
 use crate::llm::provider::{
-    LlmError, ProbeReply, ProbeRequest, Provider, Role, StopReason, StreamEvent, ToolCall,
-    TurnRequest,
+    Image, LlmError, Message, ProbeReply, ProbeRequest, Provider, StopReason, StreamEvent,
+    ToolCall, TurnRequest,
 };
 use crate::llm::sse::{SseFrame, SseParser};
 
@@ -57,19 +57,7 @@ pub fn auth_headers(api_key: Option<&str>) -> HashMap<String, String> {
 
 /// Maps Magi's neutral turn onto Anthropic's request body.
 pub fn build_request(request: &TurnRequest) -> serde_json::Value {
-    let messages: Vec<_> = request
-        .messages
-        .iter()
-        .map(|message| {
-            json!({
-                "role": match message.role {
-                    Role::User => "user",
-                    Role::Assistant => "assistant",
-                },
-                "content": message.content,
-            })
-        })
-        .collect();
+    let messages: Vec<_> = request.messages.iter().map(wire_message).collect();
 
     let mut body = json!({
         "model": request.model,
@@ -85,7 +73,99 @@ pub fn build_request(request: &TurnRequest) -> serde_json::Value {
         body["system"] = json!(system);
     }
 
+    if !request.tools.is_empty() {
+        body["tools"] = json!(request
+            .tools
+            .iter()
+            .map(|tool| json!({
+                "name": tool.name,
+                "description": tool.description,
+                // `input_schema`, not `parameters`, and unwrapped rather than nested
+                // under a `function` key. Two differences from the OpenAI family in one
+                // short object, which is why these are separate implementations.
+                "input_schema": tool.parameters,
+            }))
+            .collect::<Vec<_>>());
+    }
+
     body
+}
+
+/// One neutral message as Anthropic's content blocks.
+///
+/// Always an array, even for plain text. Anthropic accepts a bare string there, but
+/// mixing the two forms across a conversation is how a subtle bug hides — and the
+/// agentic path needs the array anyway, since an assistant turn carries prose and a
+/// `tool_use` block together.
+fn wire_message(message: &Message) -> serde_json::Value {
+    match message {
+        Message::User { text, images } => {
+            let mut content = vec![json!({ "type": "text", "text": text })];
+            for image in images {
+                content.push(image_block(image));
+            }
+            json!({ "role": "user", "content": content })
+        }
+
+        Message::Assistant { text, calls } => {
+            let mut content = Vec::with_capacity(calls.len() + 1);
+            // Text first, then the calls, which is the order the model produced them and
+            // the order Anthropic returns them in.
+            if !text.is_empty() {
+                content.push(json!({ "type": "text", "text": text }));
+            }
+            for call in calls {
+                content.push(json!({
+                    "type": "tool_use",
+                    "id": call.id,
+                    "name": call.name,
+                    // Actual JSON here, unlike the OpenAI family's encoded string.
+                    "input": call.arguments,
+                }));
+            }
+            json!({ "role": "assistant", "content": content })
+        }
+
+        Message::ToolResult {
+            call_id,
+            text,
+            images,
+        } => {
+            // A `user` message, which reads oddly and is what the API wants: the result
+            // is the user's side of the exchange even though no person wrote it.
+            let mut inner = Vec::with_capacity(images.len() + 1);
+            if !text.is_empty() {
+                inner.push(json!({ "type": "text", "text": text }));
+            }
+            // Inside the tool result, unlike the OpenAI family, where the images have to
+            // follow as a separate user message.
+            for image in images {
+                inner.push(image_block(image));
+            }
+
+            json!({
+                "role": "user",
+                "content": [json!({
+                    "type": "tool_result",
+                    "tool_use_id": call_id,
+                    "content": inner,
+                })],
+            })
+        }
+    }
+}
+
+/// An image block. Base64 with no newlines — Anthropic rejects a wrapped payload.
+fn image_block(image: &Image) -> serde_json::Value {
+    use base64::Engine;
+    json!({
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": image.media_type,
+            "data": base64::engine::general_purpose::STANDARD.encode(&image.bytes),
+        }
+    })
 }
 
 /// Translates a stop reason, keeping unknown ones intact.
@@ -93,6 +173,8 @@ fn stop_reason(raw: &str) -> StopReason {
     match raw {
         "end_turn" | "stop_sequence" => StopReason::EndTurn,
         "max_tokens" => StopReason::MaxTokens,
+        // Not the end of the turn: the loop answers the call and asks again.
+        "tool_use" => StopReason::ToolUse,
         // `refusal` lands here on purpose. A safety classifier can decline with
         // HTTP 200, and folding that into EndTurn would show the user an empty
         // answer with nothing to explain it.
@@ -115,6 +197,20 @@ pub fn parse_frame(frame: &SseFrame) -> Option<StreamEvent> {
     let parsed: serde_json::Value = serde_json::from_str(data).ok()?;
 
     match parsed.get("type").and_then(|t| t.as_str())? {
+        // A tool call beginning. `id` and `name` are both present here; `input` is an
+        // empty object and must not be read — the arguments arrive as fragments after.
+        "content_block_start" => {
+            let block = parsed.get("content_block")?;
+            if block.get("type")?.as_str()? != "tool_use" {
+                return None;
+            }
+            Some(StreamEvent::ToolStart {
+                index: parsed.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize,
+                id: block.get("id")?.as_str()?.to_string(),
+                name: block.get("name")?.as_str()?.to_string(),
+            })
+        }
+
         "content_block_delta" => {
             let delta = parsed.get("delta")?;
             // Text is the answer; thinking is the working. They travel as
@@ -131,6 +227,21 @@ pub fn parse_frame(frame: &SseFrame) -> Option<StreamEvent> {
                     .and_then(|t| t.as_str())
                     .filter(|t| !t.is_empty())
                     .map(|t| StreamEvent::Thinking(t.to_string())),
+                // Tool arguments: a fragment, never valid JSON alone. Anthropic's own
+                // docs call these "partial JSON strings" and note that the final `input`
+                // is an object. The first fragment is always `""`, which is why the empty
+                // string is passed through rather than filtered — the accumulator treats
+                // appending nothing as nothing.
+                "input_json_delta" => {
+                    delta
+                        .get("partial_json")
+                        .and_then(|j| j.as_str())
+                        .map(|json| StreamEvent::ToolArguments {
+                            index: parsed.get("index").and_then(|i| i.as_u64()).unwrap_or(0)
+                                as usize,
+                            json: json.to_string(),
+                        })
+                }
                 _ => None,
             }
         }
@@ -263,6 +374,12 @@ pub fn parse_probe_reply(url: &str, body: &str) -> Result<ProbeReply, LlmError> 
             Some("tool_use") => {
                 if let Some(name) = block.get("name").and_then(|n| n.as_str()) {
                     tool_calls.push(ToolCall {
+                        // Read if present, not required: the probe never answers a call.
+                        id: block
+                            .get("id")
+                            .and_then(|id| id.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
                         name: name.to_string(),
                         arguments: block.get("input").cloned().unwrap_or(json!({})),
                     });
@@ -416,6 +533,191 @@ impl Provider for Anthropic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_question_with_a_screenshot_carries_an_image_block() {
+        let body = build_request(&with_messages(vec![Message::user_seeing(
+            "what is this error",
+            vec![a_screenshot()],
+        )]));
+
+        let content = body["messages"][0]["content"].as_array().expect("blocks");
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[1]["type"], "image");
+        assert_eq!(content[1]["source"]["media_type"], "image/png");
+    }
+
+    #[test]
+    fn a_streamed_tool_call_reassembles_from_the_documented_events() {
+        // Anthropic's own example sequence, abbreviated: the block start carries `id` and
+        // `name` with `input` as an empty object, then `input_json_delta` fragments whose
+        // first is always the empty string.
+        let events = [
+            (
+                "content_block_start",
+                r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_01T","name":"capture_screen","input":{}}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":""}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"reason\":"}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":" \"the error\"}"}}"#,
+            ),
+        ];
+
+        let mut stream = crate::llm::toolstream::ToolCallStream::new();
+        for (name, data) in events {
+            match parse_frame(&frame(name, data)) {
+                Some(StreamEvent::ToolStart { index, id, name }) => stream.begin(index, &id, &name),
+                Some(StreamEvent::ToolArguments { index, json }) => {
+                    stream.push_arguments(index, &json)
+                }
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+
+        let calls = stream.finish();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "toolu_01T");
+        assert_eq!(calls[0].name, "capture_screen");
+        assert_eq!(calls[0].arguments["reason"], "the error");
+    }
+
+    #[test]
+    fn a_text_block_start_is_not_a_tool_call() {
+        // Every response opens a text block. Treating that as a tool start would invent a
+        // nameless call on every single turn.
+        assert_eq!(
+            parse_frame(&frame(
+                "content_block_start",
+                r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn the_tool_use_stop_reason_is_not_the_end_of_the_turn() {
+        assert_eq!(
+            parse_frame(&frame(
+                "message_delta",
+                r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"}}"#
+            )),
+            Some(StreamEvent::Done(StopReason::ToolUse))
+        );
+    }
+
+    #[test]
+    fn the_block_index_separates_parallel_calls() {
+        // Anthropic streams parallel calls as separate blocks, distinguished only by the
+        // index that also positions them in the final content array.
+        let second = parse_frame(&frame(
+            "content_block_start",
+            r#"{"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"toolu_02","name":"capture_screen","input":{}}}"#,
+        ));
+        assert!(matches!(
+            second,
+            Some(StreamEvent::ToolStart { index: 2, .. })
+        ));
+    }
+
+    fn a_screenshot() -> Image {
+        Image {
+            media_type: "image/png",
+            bytes: vec![0x89, 0x50, 0x4E, 0x47],
+        }
+    }
+
+    fn a_call() -> ToolCall {
+        ToolCall {
+            id: "call_1".to_string(),
+            name: "capture_screen".to_string(),
+            arguments: serde_json::json!({ "reason": "read the error" }),
+        }
+    }
+
+    fn with_messages(messages: Vec<Message>) -> TurnRequest {
+        TurnRequest {
+            model: "m".to_string(),
+            system: None,
+            messages,
+            max_tokens: 100,
+            tools: vec![crate::llm::tools::capture_screen()],
+        }
+    }
+
+    #[test]
+    fn a_tool_definition_uses_input_schema_and_no_wrapper() {
+        // Two differences from the OpenAI family in one short object: the key is
+        // `input_schema`, and there is no `function` wrapper.
+        let body = build_request(&with_messages(vec![Message::user("hi")]));
+        let tool = &body["tools"][0];
+        assert_eq!(tool["name"], "capture_screen");
+        assert_eq!(tool["input_schema"]["type"], "object");
+        assert!(tool.get("function").is_none(), "{tool}");
+        assert!(tool.get("type").is_none(), "{tool}");
+    }
+
+    #[test]
+    fn tool_call_input_goes_out_as_an_object() {
+        // An object, not the encoded string the OpenAI family wants.
+        let body = build_request(&with_messages(vec![Message::Assistant {
+            text: "Let me look.".to_string(),
+            calls: vec![a_call()],
+        }]));
+
+        let content = body["messages"][0]["content"].as_array().expect("array");
+        assert_eq!(content[0]["type"], "text", "text comes first");
+        assert_eq!(content[1]["type"], "tool_use");
+        assert_eq!(content[1]["id"], "call_1");
+        assert!(
+            content[1]["input"].is_object(),
+            "input must be JSON, not a string: {}",
+            content[1]["input"]
+        );
+    }
+
+    #[test]
+    fn a_screenshot_rides_inside_the_tool_result() {
+        // Unlike the OpenAI family. `tool_result.content` accepts nested blocks, so the
+        // image belongs to the result rather than to a message after it — which keeps
+        // the association between the call and its picture explicit.
+        let body = build_request(&with_messages(vec![Message::ToolResult {
+            call_id: "call_1".to_string(),
+            text: "Screenshot captured.".to_string(),
+            images: vec![a_screenshot()],
+        }]));
+
+        let messages = body["messages"].as_array().expect("array");
+        assert_eq!(messages.len(), 1, "no extra message is needed: {body}");
+        assert_eq!(messages[0]["role"], "user", "a result is the user's turn");
+
+        let result = &messages[0]["content"][0];
+        assert_eq!(result["type"], "tool_result");
+        assert_eq!(result["tool_use_id"], "call_1");
+
+        let inner = result["content"].as_array().expect("nested blocks");
+        assert_eq!(inner[1]["type"], "image");
+        assert_eq!(inner[1]["source"]["type"], "base64");
+        assert_eq!(inner[1]["source"]["media_type"], "image/png");
+        let data = inner[1]["source"]["data"].as_str().expect("base64");
+        assert!(!data.contains('\n'), "Anthropic rejects a wrapped payload");
+    }
+
+    #[test]
+    fn content_is_always_an_array_even_for_plain_text() {
+        // A bare string is accepted, but mixing the two forms across a conversation is
+        // where a subtle bug hides.
+        let body = build_request(&with_messages(vec![Message::user("hello")]));
+        assert!(body["messages"][0]["content"].is_array(), "{body}");
+        assert_eq!(body["messages"][0]["content"][0]["text"], "hello");
+    }
     use crate::llm::provider::{Message, TurnRequest};
 
     fn a_request() -> TurnRequest {
@@ -424,6 +726,7 @@ mod tests {
             system: Some("be brief".into()),
             messages: vec![Message::user("hello")],
             max_tokens: 1024,
+            tools: Vec::new(),
         }
     }
 

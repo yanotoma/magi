@@ -2,10 +2,10 @@
 
 Complete breakdown of what is done and what is pending, across every milestone.
 
-**Last updated:** 2026-08-07
-**Current phase:** M4 — audio and speech-to-text, targeting `0.3.0-alpha.1`
+**Last updated:** 2026-08-10
+**Current phase:** M5 — screen capture & agentic vision, targeting `0.4.0-alpha.1`
 **Current version:** `0.2.0-alpha.2` (released — see [VERSIONING.md](VERSIONING.md))
-**Overall:** 98 / 157 tasks done (62%)
+**Overall:** 113 / 160 tasks done (71%)
 
 Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 
@@ -20,10 +20,10 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 | **M2** | Config & providers | `0.2.0-alpha.1` | 28 | 28 | ✅ Shipped |
 | **M3** | Pre-flight & capability tiers | `0.2.0-alpha.2` | 13 | 14 | ✅ Shipped |
 | **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 27 | 27 | ✅ Shipped |
-| **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 0 | 13 | ⬜ |
+| **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 15 | 16 | ✅ Shipped |
 | **M6** | Session machine & panel UX | `0.5.0-beta.1` | 0 | 16 | ⬜ |
 | **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 14 | ⬜ |
-| — | **v1 total** | `1.0.0` | **98** | **143** | |
+| — | **v1 total** | `1.0.0` | **113** | **146** | |
 | **M8** | v2 — wake word & TTS | `1.1.0` | 0 | 9 | 🔮 Post-v1 |
 | **M9** | v3 — computer use | `1.2.0` | 0 | 5 | 🔮 Post-v1 |
 
@@ -200,19 +200,22 @@ Deliberately not the session state machine, which is M6's. This is the smallest 
 
 ## M5 — Screen capture & agentic vision
 
-- [ ] `capture` module — enumerate displays and windows via `xcap`
-- [ ] Capture the active display as PNG bytes
-- [ ] Capture a specific window
-- [ ] Downscale before encoding — vision token cost scales with resolution
-- [ ] `ScreenCapture` trait plus a fake returning a fixture image
-- [ ] Screen Recording permission handling, including the restart-required path
-- [ ] `llm::tools` — define the `capture_screen` tool schema
-- [ ] Tool-call execution loop: `tool_use` → capture → resend with image
-- [ ] Guard against capture loops (cap calls per turn)
-- [ ] Tier 2 deictic heuristic ("here", "this", "this error", "this screen", …)
-- [ ] Unit tests for deictic detection, including negative cases
-- [ ] Emit `magi://captured` so the panel can show a capture indicator
-- [ ] Capture audit log, visible in Settings
+- [x] `capture` module — `capture/screen.rs` wraps `objc2-screen-capture-kit` (ScreenCaptureKit). `xcap` was rejected: every current Rust capture crate uses `CGWindowListCreateImage`, which is marked `obsoleted=15.0` and, measured, returns a picture of an empty desktop when Screen Recording permission is absent rather than reporting an error. ScreenCaptureKit fails with a real error (`SCStreamErrorUserDeclined = -3801`). The trade-off: the one-shot screenshot call (`SCScreenshotManager`) requires macOS 14, raising Magi's minimum from 11
+- [x] Capture the active display as PNG bytes — "active" means the display containing the frontmost window, not the primary display. On a single monitor the distinction does not exist; on a three-monitor desk it is the difference between capturing what the user is looking at and capturing whatever the primary display happens to show
+- [x] Capture a specific window — the default `capture_screen` target. A 1440×900 window fits the standard-tier token budget at ~1.09×; the same ultrawide desktop shrinks to 0.46× (same token cost, ~2.4× the pixels per character). The default is the sharpest per token: the full screen spends most of its budget on wallpaper. The tool result carries the window list as text beside the image — a model was observed reading blurry pixels to recover application names that `windows()` returns exactly as strings
+- [x] Downscale before encoding — vision token cost scales with resolution
+- [x] `ScreenCapture` trait plus a fake returning a fixture image — in `capture/source.rs`
+- [x] Screen Recording permission handling, including the restart-required path. `CGPreflightScreenCaptureAccess` checks access without prompting — the only way to query the permission without triggering the system dialog, at the cost of two reachable states instead of three: never-asked and denied are indistinguishable because it returns a bare bool. Both are handled the same way: an explanation and a System Settings deep link in the new Screen pane. The restart-required aspect is not a separate code path — it is covered by the existing `Permission::Denied` explanation text, which already notes that quitting and reopening Magi is required
+- [x] `llm::tools` — define the `capture_screen` tool schema. `tools.rs` carries the full spec, a `Reason` type distinguishing a model-initiated capture (the model states its own reason) from a deictic one (the user's deictic phrase is passed through), and `CaptureBudget` — consumed by the loop guard below
+- [x] Tool-call execution loop — `commands.rs` streams the assistant turn, accumulates tool calls via `llm/toolstream.rs` (which reassembles streamed fragments; no individual fragment is valid JSON in either provider family), captures the requested target, replays the assistant turn whole, answers each call with the image and window list as text, then repeats. Bounded by `CaptureBudget` (3 per turn, saturating)
+- [x] Guard against capture loops (cap calls per turn). `CaptureBudget` is a saturating `u8` capped at 3: saturation means a loop that exhausts the budget cannot wrap the counter back to zero and hand itself a fresh one
+- [x] Tier 2 deictic heuristic — `asks_about_the_screen(text)` detects phrases in English and Spanish that imply the user wants the screen seen ("here", "this screen", "this error", "acá", "esta pantalla", …) and returns the longest match and its language so the capture audit log can say why. Matching is over tokens, not substrings, so "this" does not fire inside "thistle". Two words excluded with tests: English "that" (a conjunction far more often than a demonstrative) and Spanish "está" ("is") — without the exclusion, an accent-stripping normaliser folds "está" into "esta" ("this") and "¿está funcionando?" becomes a request for a screenshot. Spanish was not in the design doc's examples, which were written before M4 shipped speech in eleven languages — an English-only list means a Spanish speaker on a Tier 2 model silently never gets a capture.
+- [x] Unit tests for deictic detection, including negative cases
+- [x] Wire the Tier 2 path — `heuristic_capture` runs the deictic matcher over the user's text before the request and attaches a screenshot to the question itself, recorded with `Reason::PhraseMatched` so the log names the phrase that caused it. The matched phrase also chooses the target at no extra cost: one naming the screen captures the display, anything else captures the window in front, which is both the commoner case and the sharper picture. A capture that fails is not reported to the user — they asked a question, not for a screenshot, and a guess that did not work should not become an error about a feature they never invoked
+- [x] Emit `magi://captured` so the panel can show a capture indicator — the panel shows "Read <what>" while the turn runs. `Reason::UserAsked` is used for the Settings test button
+- [x] Capture audit log, visible in Settings — a new **Screen** pane (between Voice and Hotkeys) showing the Screen Recording permission row, the list of captures, and a Clear button. The log is in-memory only, never written to disk, and that is deliberate: a persisted list of which windows were open and when is a record of someone's working day, and `config.toml` is meant to be safe to paste into a bug report; a sibling file of window titles would undo that. Each entry carries what was captured, why (either the model's stated reason or the user's own deictic phrase), the time, the pixel dimensions, and the visual-token cost. Bounded at 300 entries, oldest dropped. The empty state says plainly "Magi has not read your screen" rather than rendering an empty table — the absence of captures is a fact worth stating
+- [ ] Extend the deictic heuristic to the remaining nine Settings languages — pt, fr, de, it, nl, ja, zh, ko, ru. A user who selects any of these gets a Tier 2 model that silently never captures, because "no match" is indistinguishable from "nothing to look at". Adding a language is adding rows to a table, but each row must be verified by a speaker of that language and cross-checked against all existing rows for collisions: a word that means "the" in one language and "this" in another would fire on every sentence
+- [x] Correct the vision token figure in `docs/superpowers/specs/2026-08-06-magi-design.md` section 5 — it states a 1512×982 screenshot costs "roughly 1,100 vision tokens on Claude", but Anthropic's current formula (`ceil(w/28) * ceil(h/28)`, standard-tier cap 1568) yields 1944 for that size. The conclusion is unaffected — images dominate cost — but a stale number in a design doc reads as authoritative and will mislead the next reader
 
 ---
 
@@ -295,7 +298,7 @@ Project-local skills exist so future sessions don't re-derive version-specific t
 | `llm-providers` | ✅ | Provider protocol families, vision/tool/stream formats, pre-flight probes |
 | `macos-permissions` | ✅ | TCC, Info.plist, signing, notarization, sidecar signing |
 | `audio-stt` | ✅ | cpal 0.18 behavioural breaks, the 16 kHz contract, the realtime callback, whisper-rs build and Metal, and the model download whose obvious checksum is the wrong value |
-| `screen-capture` | M5 | xcap, multi-display, downscaling for vision cost |
+| `screen-capture` | ✅ | The capture API obsoleted in macOS 15, the permission that degrades silently instead of failing, logical points vs pixels, and the vision-token budget that is not a pixel budget |
 | `release` | M7 | Tag → universal build → sign → notarize → staple → GitHub release → updater |
 | `wake-word` | M8 | openWakeWord ONNX via `ort`, false-positive tuning |
 | `tts` | M8 | Piper sidecar, sentence chunking, barge-in |
@@ -357,6 +360,116 @@ wins", and only the first of those would mean a user has to think about word ord
       here. If mixed speech degrades, the fix is not a better shortlist — per-segment
       detection means re-running detection per window and accepting that a segment
       boundary can land mid-sentence
+
+## Requested: drawing on the screen to point things out
+
+Asked for after agentic capture worked: *"me gustaría que magi sea capaz de dibujar en mi
+monitor... círculos, o flechas, o incluso escribir en mi pantalla para indicarme dónde dar
+click o qué hacer"*.
+
+**Feasible, and the drawing is the easy half.** A transparent, undecorated, always-on-top
+window with cursor events ignored is a shape Tauri already builds — the panel is three of
+those four things — and `set_ignore_cursor_events(true)` is what lets clicks pass through to
+the application underneath. Magi renders in a webview, so an arrow, a circle or a label is
+SVG. Nothing new is needed permission-wise either: pointing at the screen requires no
+Accessibility grant, because nothing is being clicked.
+
+**The hard half is knowing where to draw.** Coordinates have to come from the model, and the
+model saw a downscaled screenshot, so every mark depends on inverting that transform. Two
+things make this more tractable here than it usually is:
+
+- Magi *asks* ScreenCaptureKit for an exact output size rather than resizing afterwards, so
+  the mapping from image pixels back to screen points is exact and known, not inferred.
+  Anthropic's own vision-coordinates guidance names failing to account for the resize as the
+  common cause of coordinate misalignment; that failure mode is closed by construction.
+- The capture already records which display and which window it photographed, so a mark can
+  be placed on the right monitor on a desk with three of them.
+
+What is genuinely unknown is **whether a general vision model can point accurately enough to
+be useful.** Models built for computer use are trained to; a model asked "where is the Save
+button" often answers with coordinates that are close enough to describe and too far off to
+draw on. That is a measurement to make before building the overlay, not an assumption to
+build on — an arrow pointing confidently at the wrong button is worse than a sentence saying
+"the Save button, top right".
+
+Note also what this is: **M9's coordinate problem without M9's risk.** Computer use is this
+plus synthesising input, and the dangerous part is the synthesis. Advising where to click
+while the person clicks is strictly safer than clicking for them, and it may well be the more
+useful feature. Worth considering ahead of M9 rather than as part of it.
+
+- [ ] Measure first: give a model a screenshot with a known target and ask for its
+      coordinates, across several models and window sizes. Record the error in pixels. If
+      the error exceeds the size of a button, the overlay is not worth building yet and the
+      honest feature is a sentence rather than an arrow
+- [ ] An overlay window: transparent, undecorated, always-on-top, `skipTaskbar`, and
+      cursor-events-ignored so it never intercepts a click. One per display, since a mark
+      belongs to the screen it describes
+- [ ] A neutral shape vocabulary — circle, arrow, box, label — with coordinates in the
+      captured image's own pixel space, converted to screen points by Magi rather than by
+      the model. The model should never be asked to reason about Retina scaling or monitor
+      layout, both of which it cannot see
+- [ ] A `point_at` tool for the agentic tier, offered only where the measurement above says
+      the model can hit what it aims at
+- [ ] Marks expire. An arrow left on screen after the answer is stale advice, and stale
+      advice about where to click is worse than none — dismiss on the next question, on
+      Escape, and after a timeout
+
+## Deferred: what a conversation costs
+
+Requested after watching agentic capture work: *"quiero saber que tan costoso es mantener
+una conversación con el agente"*. A fair question that Magi currently cannot answer, and the
+design makes it a sharper one than usual — history is resent on every turn, so an image
+attached once is paid for again on every later turn, and the cost of a thread grows
+faster than its length. `Settings › Screen` already shows what each capture cost in visual
+tokens, which is the expensive half and only half.
+
+Both families report usage, and one of them needs asking:
+
+- **Anthropic** puts it in the `message_delta` event of the stream, and `message_start`
+  carries the input count.
+- **OpenAI-compatible** streams **no usage at all by default** — it arrives only if the
+  request sets `stream_options: {"include_usage": true}`, and then in a final chunk whose
+  `choices` array is empty. A parser that assumes every chunk has a choice drops it.
+
+- [ ] Read usage from both providers' streams and carry it as a neutral type — input,
+      output, and cached input where reported, since a cached prompt costs a fraction of a
+      fresh one and a total that ignores the distinction overstates a long thread
+- [ ] Send `stream_options: {"include_usage": true}` for the OpenAI family, and treat a
+      final chunk with an empty `choices` array as usage rather than as a malformed frame
+- [ ] Show the running cost of the open conversation in the panel — tokens for the thread
+      so far, not for the last turn, because the resend is the part that surprises people
+- [ ] A usage log in Settings beside the capture log: per turn, what went up, what came
+      back, and what it cost. In memory only, for the same reason the capture log is —
+      a persisted record of every question asked is a diary nobody consented to
+- [ ] Money, not just tokens, where the price is known. A per-model price in the provider
+      config would let Settings show a number people actually reason about; leave it
+      absent rather than guessed, since a wrong price is worse than none
+
+## Deferred: lowering the macOS floor back below 14
+
+Outside the summary table, same as the sections below it.
+
+**Decision — ScreenCaptureKit, and macOS 14 as the minimum.** The alternative was
+`CGWindowListCreateImage`, which covers macOS 11 and still runs today, but which returns a
+picture of an empty desktop rather than an error when Screen Recording permission is absent.
+A permission check before every capture closes that hole, so the choice was really about
+longevity: Apple marks that call `obsoleted=15.0` with "Please use ScreenCaptureKit
+instead", and building capture on it means rebuilding it later. ScreenCaptureKit itself
+starts at macOS 12.3, but its one-shot `SCScreenshotManager.captureImageWithFilter` — the
+only path that is a screenshot rather than a video stream stopped after one frame — starts
+at 14.0.
+
+Lowering the floor later only widens support; it can never strand someone who already runs
+Magi, which is why taking the simple path first is safe.
+
+**The maintainer has since said they do not need to support older macOS versions**, so the
+task below is recorded rather than planned. Do not spend effort on it without someone asking
+for it — it is a fair amount of machinery for two macOS versions nobody has asked about.
+
+- [ ] Capture on macOS 12.3 through 13 via `SCStream`, to lower the minimum from 14. Needs
+      an `SCStreamOutput` delegate implemented with `objc2`'s `define_class!`, a stream
+      started and stopped around a single frame, and a `CMSampleBuffer` converted to pixels
+      — considerably more machinery than the one-shot call, for two macOS versions
 
 ## Deferred: native audio input
 

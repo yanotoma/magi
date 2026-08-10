@@ -8,6 +8,7 @@
     onVoiceEvents,
     sendTextTurn,
     type VoiceState,
+    onCaptured,
   } from "$lib/ipc";
   import { renderMarkdown } from "$lib/markdown";
   import {
@@ -33,6 +34,21 @@
   const busy = $derived(conversation.streaming !== null);
   /** The request is away but nothing has come back yet. */
   const waiting = $derived(conversation.streaming === "" && !conversation.thinking);
+
+  /** What the model most recently looked at, while a turn is running.
+   *
+   *  Shown rather than logged silently: a screenshot leaving the machine is the one thing
+   *  in Magi a user would want to notice happening, and the audit log in Settings answers
+   *  it afterwards rather than at the moment. Cleared when the turn ends. */
+  let captured = $state<string | null>(null);
+
+  $effect(() => {
+    // Unsubscribed by the returned function, like the others in this file.
+    const stop = onCaptured((subject) => (captured = subject));
+    return () => {
+      stop.then((unlisten) => unlisten());
+    };
+  });
 
   $effect(() => {
     let stop: (() => void) | undefined;
@@ -96,6 +112,9 @@
     // as history and once as itself.
     const history = historyForRequest();
     input = "";
+    // Cleared here, not on completion: leaving it up would have the next question
+    // appear to have read a screen it never did.
+    captured = null;
     startTurn(text);
 
     try {
@@ -172,7 +191,16 @@
             {/if}
           {/if}
 
-          {#if turn.role === "assistant"}
+          {#if turn.role === "assistant" && turn.content === ""}
+            <!--
+              A turn that produced reasoning and no answer. Reachable, and it used to
+              look like a hang: the turn was discarded, nothing appeared, and asking
+              again did the same. Saying so is the whole fix — the reasoning above is
+              still there to read, and now there is something admitting the reply is
+              missing rather than an empty bubble.
+            -->
+            <p class="content empty-answer">No answer — only the reasoning above.</p>
+          {:else if turn.role === "assistant"}
             <!-- Safe because the renderer cannot emit HTML. See lib/markdown.ts. -->
             <div class="md">{@html renderMarkdown(turn.content)}</div>
           {:else}
@@ -190,6 +218,10 @@
         <div class="bubble assistant">
           {#if showThinking && conversation.thinking}
             <p class="reasoning live">{conversation.thinking}</p>
+          {/if}
+
+          {#if captured}
+            <p class="looked">Read {captured}</p>
           {/if}
 
           {#if waiting}
@@ -360,6 +392,21 @@
 
   .disclosure:hover {
     opacity: 0.8;
+  }
+
+  /* Muted, because it is an admission rather than content. Same weight as a hint
+     elsewhere in the app. */
+  .empty-answer {
+    font-style: italic;
+    opacity: var(--muted-strong);
+  }
+
+  /* Quiet, and above the answer. It is a statement about what Magi did, not part of
+     what the model said. */
+  .looked {
+    font-size: 11px;
+    margin: 0 0 6px;
+    opacity: var(--muted-strong);
   }
 
   .reasoning {
