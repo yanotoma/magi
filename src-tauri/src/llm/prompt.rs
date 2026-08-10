@@ -23,6 +23,26 @@ You are Magi, a desktop assistant. Your answer appears in a small overlay panel,
 so be brief and lead with the answer. Skip preamble and restatement. Use plain \
 prose; reach for a short list only when the answer really is a list.";
 
+/// Which machine the user is sitting at.
+///
+/// Absent at first, and the omission showed: asked what applications were open, a
+/// model answered "usa el administrador de tareas (Ctrl+Shift+Esc en Windows)" to
+/// someone on a Mac. Nothing in the prompt said otherwise, so the model guessed the
+/// most common desktop and guessed wrong.
+///
+/// From `cfg!` rather than a literal, so it stays true rather than becoming a stale
+/// claim on the day Magi runs somewhere else.
+const fn platform() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "The user is on a Mac. Give macOS instructions — its key names, its menus, \
+         its applications — and never Windows or Linux ones."
+    } else if cfg!(target_os = "windows") {
+        "The user is on Windows. Give Windows instructions, not macOS or Linux ones."
+    } else {
+        "The user is on Linux. Give Linux instructions, not macOS or Windows ones."
+    }
+}
+
 /// Tier 1. The model is told the tool exists and when to reach for it.
 ///
 /// The guidance on *when* matters as much as the tool's existence. Without it a
@@ -123,6 +143,8 @@ pub fn system_prompt(tier: Tier, context: &str) -> String {
     let mut prompt = String::with_capacity(IDENTITY.len() + 512);
     prompt.push_str(IDENTITY);
     prompt.push_str("\n\n");
+    prompt.push_str(platform());
+    prompt.push_str("\n\n");
     prompt.push_str(capture_clause(tier));
 
     let context = context.trim();
@@ -152,6 +174,27 @@ mod tests {
                 system_prompt(tier, "").starts_with(IDENTITY),
                 "{tier:?} did not lead with Magi's own instructions"
             );
+        }
+    }
+
+    #[test]
+    fn every_tier_says_which_machine_the_user_is_on() {
+        // Without it a model gives advice for the wrong desktop. Observed: asked what
+        // applications were open, it answered with the Windows Task Manager shortcut to
+        // someone on a Mac. It was not being careless — nothing had told it.
+        for tier in EVERY_TIER {
+            let prompt = system_prompt(tier, "");
+            assert!(
+                prompt.contains("The user is on"),
+                "{tier:?} does not say what platform the user is on"
+            );
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let prompt = system_prompt(Tier::Agentic, "");
+            assert!(prompt.contains("on a Mac"), "{prompt}");
+            assert!(prompt.contains("never Windows"), "{prompt}");
         }
     }
 
