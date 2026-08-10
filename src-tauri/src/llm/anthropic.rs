@@ -15,8 +15,8 @@ use tokio::sync::mpsc;
 use base64::Engine as _;
 
 use crate::llm::provider::{
-    LlmError, ProbeReply, ProbeRequest, Provider, Role, StopReason, StreamEvent, ToolCall,
-    TurnRequest,
+    Image, LlmError, Message, ProbeReply, ProbeRequest, Provider, StopReason, StreamEvent,
+    ToolCall, TurnRequest,
 };
 use crate::llm::sse::{SseFrame, SseParser};
 
@@ -57,19 +57,7 @@ pub fn auth_headers(api_key: Option<&str>) -> HashMap<String, String> {
 
 /// Maps Magi's neutral turn onto Anthropic's request body.
 pub fn build_request(request: &TurnRequest) -> serde_json::Value {
-    let messages: Vec<_> = request
-        .messages
-        .iter()
-        .map(|message| {
-            json!({
-                "role": match message.role {
-                    Role::User => "user",
-                    Role::Assistant => "assistant",
-                },
-                "content": message.content,
-            })
-        })
-        .collect();
+    let messages: Vec<_> = request.messages.iter().map(wire_message).collect();
 
     let mut body = json!({
         "model": request.model,
@@ -85,7 +73,96 @@ pub fn build_request(request: &TurnRequest) -> serde_json::Value {
         body["system"] = json!(system);
     }
 
+    if !request.tools.is_empty() {
+        body["tools"] = json!(request
+            .tools
+            .iter()
+            .map(|tool| json!({
+                "name": tool.name,
+                "description": tool.description,
+                // `input_schema`, not `parameters`, and unwrapped rather than nested
+                // under a `function` key. Two differences from the OpenAI family in one
+                // short object, which is why these are separate implementations.
+                "input_schema": tool.parameters,
+            }))
+            .collect::<Vec<_>>());
+    }
+
     body
+}
+
+/// One neutral message as Anthropic's content blocks.
+///
+/// Always an array, even for plain text. Anthropic accepts a bare string there, but
+/// mixing the two forms across a conversation is how a subtle bug hides — and the
+/// agentic path needs the array anyway, since an assistant turn carries prose and a
+/// `tool_use` block together.
+fn wire_message(message: &Message) -> serde_json::Value {
+    match message {
+        Message::User { text } => json!({
+            "role": "user",
+            "content": [json!({ "type": "text", "text": text })],
+        }),
+
+        Message::Assistant { text, calls } => {
+            let mut content = Vec::with_capacity(calls.len() + 1);
+            // Text first, then the calls, which is the order the model produced them and
+            // the order Anthropic returns them in.
+            if !text.is_empty() {
+                content.push(json!({ "type": "text", "text": text }));
+            }
+            for call in calls {
+                content.push(json!({
+                    "type": "tool_use",
+                    "id": call.id,
+                    "name": call.name,
+                    // Actual JSON here, unlike the OpenAI family's encoded string.
+                    "input": call.arguments,
+                }));
+            }
+            json!({ "role": "assistant", "content": content })
+        }
+
+        Message::ToolResult {
+            call_id,
+            text,
+            image,
+        } => {
+            // A `user` message, which reads oddly and is what the API wants: the result
+            // is the user's side of the exchange even though no person wrote it.
+            let mut inner = Vec::with_capacity(2);
+            if !text.is_empty() {
+                inner.push(json!({ "type": "text", "text": text }));
+            }
+            if let Some(image) = image {
+                // Inside the tool result, unlike the OpenAI family, where the image has
+                // to follow as a separate user message.
+                inner.push(image_block(image));
+            }
+
+            json!({
+                "role": "user",
+                "content": [json!({
+                    "type": "tool_result",
+                    "tool_use_id": call_id,
+                    "content": inner,
+                })],
+            })
+        }
+    }
+}
+
+/// An image block. Base64 with no newlines — Anthropic rejects a wrapped payload.
+fn image_block(image: &Image) -> serde_json::Value {
+    use base64::Engine;
+    json!({
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": image.media_type,
+            "data": base64::engine::general_purpose::STANDARD.encode(&image.bytes),
+        }
+    })
 }
 
 /// Translates a stop reason, keeping unknown ones intact.
@@ -263,6 +340,12 @@ pub fn parse_probe_reply(url: &str, body: &str) -> Result<ProbeReply, LlmError> 
             Some("tool_use") => {
                 if let Some(name) = block.get("name").and_then(|n| n.as_str()) {
                     tool_calls.push(ToolCall {
+                        // Read if present, not required: the probe never answers a call.
+                        id: block
+                            .get("id")
+                            .and_then(|id| id.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
                         name: name.to_string(),
                         arguments: block.get("input").cloned().unwrap_or(json!({})),
                     });
@@ -416,6 +499,98 @@ impl Provider for Anthropic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn a_screenshot() -> Image {
+        Image {
+            media_type: "image/png",
+            bytes: vec![0x89, 0x50, 0x4E, 0x47],
+        }
+    }
+
+    fn a_call() -> ToolCall {
+        ToolCall {
+            id: "call_1".to_string(),
+            name: "capture_screen".to_string(),
+            arguments: serde_json::json!({ "reason": "read the error" }),
+        }
+    }
+
+    fn with_messages(messages: Vec<Message>) -> TurnRequest {
+        TurnRequest {
+            model: "m".to_string(),
+            system: None,
+            messages,
+            max_tokens: 100,
+            tools: vec![crate::llm::tools::capture_screen()],
+        }
+    }
+
+    #[test]
+    fn a_tool_definition_uses_input_schema_and_no_wrapper() {
+        // Two differences from the OpenAI family in one short object: the key is
+        // `input_schema`, and there is no `function` wrapper.
+        let body = build_request(&with_messages(vec![Message::user("hi")]));
+        let tool = &body["tools"][0];
+        assert_eq!(tool["name"], "capture_screen");
+        assert_eq!(tool["input_schema"]["type"], "object");
+        assert!(tool.get("function").is_none(), "{tool}");
+        assert!(tool.get("type").is_none(), "{tool}");
+    }
+
+    #[test]
+    fn tool_call_input_goes_out_as_an_object() {
+        // An object, not the encoded string the OpenAI family wants.
+        let body = build_request(&with_messages(vec![Message::Assistant {
+            text: "Let me look.".to_string(),
+            calls: vec![a_call()],
+        }]));
+
+        let content = body["messages"][0]["content"].as_array().expect("array");
+        assert_eq!(content[0]["type"], "text", "text comes first");
+        assert_eq!(content[1]["type"], "tool_use");
+        assert_eq!(content[1]["id"], "call_1");
+        assert!(
+            content[1]["input"].is_object(),
+            "input must be JSON, not a string: {}",
+            content[1]["input"]
+        );
+    }
+
+    #[test]
+    fn a_screenshot_rides_inside_the_tool_result() {
+        // Unlike the OpenAI family. `tool_result.content` accepts nested blocks, so the
+        // image belongs to the result rather than to a message after it — which keeps
+        // the association between the call and its picture explicit.
+        let body = build_request(&with_messages(vec![Message::ToolResult {
+            call_id: "call_1".to_string(),
+            text: "Screenshot captured.".to_string(),
+            image: Some(a_screenshot()),
+        }]));
+
+        let messages = body["messages"].as_array().expect("array");
+        assert_eq!(messages.len(), 1, "no extra message is needed: {body}");
+        assert_eq!(messages[0]["role"], "user", "a result is the user's turn");
+
+        let result = &messages[0]["content"][0];
+        assert_eq!(result["type"], "tool_result");
+        assert_eq!(result["tool_use_id"], "call_1");
+
+        let inner = result["content"].as_array().expect("nested blocks");
+        assert_eq!(inner[1]["type"], "image");
+        assert_eq!(inner[1]["source"]["type"], "base64");
+        assert_eq!(inner[1]["source"]["media_type"], "image/png");
+        let data = inner[1]["source"]["data"].as_str().expect("base64");
+        assert!(!data.contains('\n'), "Anthropic rejects a wrapped payload");
+    }
+
+    #[test]
+    fn content_is_always_an_array_even_for_plain_text() {
+        // A bare string is accepted, but mixing the two forms across a conversation is
+        // where a subtle bug hides.
+        let body = build_request(&with_messages(vec![Message::user("hello")]));
+        assert!(body["messages"][0]["content"].is_array(), "{body}");
+        assert_eq!(body["messages"][0]["content"][0]["text"], "hello");
+    }
     use crate::llm::provider::{Message, TurnRequest};
 
     fn a_request() -> TurnRequest {
@@ -424,6 +599,7 @@ mod tests {
             system: Some("be brief".into()),
             messages: vec![Message::user("hello")],
             max_tokens: 1024,
+            tools: Vec::new(),
         }
     }
 

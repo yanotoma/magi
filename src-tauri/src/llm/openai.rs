@@ -15,8 +15,8 @@ use tokio::sync::mpsc;
 use base64::Engine as _;
 
 use crate::llm::provider::{
-    LlmError, ProbeReply, ProbeRequest, Provider, Role, StopReason, StreamEvent, ToolCall,
-    TurnRequest,
+    Image, LlmError, Message, ProbeReply, ProbeRequest, Provider, StopReason, StreamEvent,
+    ToolCall, TurnRequest,
 };
 use crate::llm::sse::{SseFrame, SseParser};
 
@@ -39,22 +39,112 @@ pub fn build_request(request: &TurnRequest) -> serde_json::Value {
     }
 
     for message in &request.messages {
-        messages.push(json!({
-            "role": match message.role {
-                Role::User => "user",
-                Role::Assistant => "assistant",
-            },
-            "content": message.content,
-        }));
+        push_message(&mut messages, message);
     }
 
-    json!({
+    let mut body = json!({
         "model": request.model,
         "messages": messages,
         "stream": true,
         // Optional here, required by Anthropic, so Magi always sends it.
         "max_tokens": request.max_tokens,
-    })
+    });
+
+    if !request.tools.is_empty() {
+        body["tools"] = json!(request
+            .tools
+            .iter()
+            .map(|tool| json!({
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.parameters,
+                }
+            }))
+            .collect::<Vec<_>>());
+        // "auto" rather than forcing the call. The model deciding *when* to look is the
+        // whole design; forcing it would make every turn pay for an image.
+        body["tool_choice"] = json!("auto");
+    }
+
+    body
+}
+
+/// Appends one neutral message to this family's `messages` array.
+///
+/// Appends rather than returns, because one neutral message can become **two** wire
+/// messages. A tool result carrying a screenshot is the case: this family's
+/// `role: "tool"` message takes text only, so the image cannot ride along inside it
+/// and follows as a `user` message with an `image_url` part. Anthropic has no such
+/// split — it puts the image inside the tool result — which is precisely the kind of
+/// divergence the neutral types exist to absorb.
+fn push_message(messages: &mut Vec<serde_json::Value>, message: &Message) {
+    match message {
+        Message::User { text } => {
+            messages.push(json!({ "role": "user", "content": text }));
+        }
+
+        Message::Assistant { text, calls } if calls.is_empty() => {
+            messages.push(json!({ "role": "assistant", "content": text }));
+        }
+
+        Message::Assistant { text, calls } => {
+            messages.push(json!({
+                "role": "assistant",
+                // Null rather than an empty string when the model said nothing but
+                // called a tool. Some endpoints in this family reject `""` alongside
+                // `tool_calls`, and null is what OpenAI's own responses contain.
+                "content": if text.is_empty() { serde_json::Value::Null } else { json!(text) },
+                "tool_calls": calls
+                    .iter()
+                    .map(|call| json!({
+                        "id": call.id,
+                        "type": "function",
+                        "function": {
+                            "name": call.name,
+                            // A *string* of JSON, not JSON. This family nests the
+                            // arguments as an encoded string on the way out as well as
+                            // on the way in.
+                            "arguments": call.arguments.to_string(),
+                        }
+                    }))
+                    .collect::<Vec<_>>(),
+            }));
+        }
+
+        Message::ToolResult {
+            call_id,
+            text,
+            image,
+        } => {
+            messages.push(json!({
+                "role": "tool",
+                "tool_call_id": call_id,
+                "content": text,
+            }));
+
+            if let Some(image) = image {
+                messages.push(json!({
+                    "role": "user",
+                    "content": [json!({
+                        "type": "image_url",
+                        "image_url": { "url": data_url(image) },
+                    })],
+                }));
+            }
+        }
+    }
+}
+
+/// An image as this family wants it: a `data:` URL with base64 payload.
+fn data_url(image: &Image) -> String {
+    use base64::Engine;
+    format!(
+        "data:{};base64,{}",
+        image.media_type,
+        base64::engine::general_purpose::STANDARD.encode(&image.bytes)
+    )
 }
 
 /// Turns one SSE frame into an event, or `None` for frames with nothing to say.
@@ -247,7 +337,17 @@ pub fn parse_probe_reply(url: &str, body: &str) -> Result<ProbeReply, LlmError> 
                         serde_json::from_str(raw).ok()?
                     };
 
-                    Some(ToolCall { name, arguments })
+                    Some(ToolCall {
+                        // The probe only checks that a call is well formed and never
+                        // answers one, so the id is read if present and not required.
+                        id: call
+                            .get("id")
+                            .and_then(|id| id.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        name,
+                        arguments,
+                    })
                 })
                 .collect()
         })
@@ -390,6 +490,125 @@ impl Provider for OpenAiCompatible {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn a_screenshot() -> Image {
+        Image {
+            media_type: "image/png",
+            bytes: vec![0x89, 0x50, 0x4E, 0x47],
+        }
+    }
+
+    fn a_call() -> ToolCall {
+        ToolCall {
+            id: "call_1".to_string(),
+            name: "capture_screen".to_string(),
+            arguments: serde_json::json!({ "reason": "read the error" }),
+        }
+    }
+
+    fn with_messages(messages: Vec<Message>) -> TurnRequest {
+        TurnRequest {
+            model: "m".to_string(),
+            system: None,
+            messages,
+            max_tokens: 100,
+            tools: vec![crate::llm::tools::capture_screen()],
+        }
+    }
+
+    #[test]
+    fn a_tool_definition_is_nested_under_a_function_key() {
+        // This family wraps the schema; Anthropic does not. Getting it wrong is a 400
+        // that reads as though the tool itself is malformed.
+        let body = build_request(&with_messages(vec![Message::user("hi")]));
+        let tool = &body["tools"][0];
+        assert_eq!(tool["type"], "function");
+        assert_eq!(tool["function"]["name"], "capture_screen");
+        assert_eq!(tool["function"]["parameters"]["type"], "object");
+        assert_eq!(body["tool_choice"], "auto");
+    }
+
+    #[test]
+    fn no_tools_means_no_tools_key_at_all() {
+        // An empty array is not the same as absence for every endpoint in this family,
+        // and a tier that must not see tools must not see the key either.
+        let mut request = with_messages(vec![Message::user("hi")]);
+        request.tools.clear();
+        let body = build_request(&request);
+        assert!(body.get("tools").is_none(), "{body}");
+        assert!(body.get("tool_choice").is_none(), "{body}");
+    }
+
+    #[test]
+    fn tool_call_arguments_go_out_as_an_encoded_string() {
+        // The one shape most likely to be got wrong: this family nests the arguments as
+        // a JSON *string* in both directions, while Anthropic sends an object.
+        let body = build_request(&with_messages(vec![Message::Assistant {
+            text: String::new(),
+            calls: vec![a_call()],
+        }]));
+        let call = &body["messages"][0]["tool_calls"][0];
+        assert_eq!(call["id"], "call_1");
+        assert_eq!(call["type"], "function");
+        let arguments = call["function"]["arguments"]
+            .as_str()
+            .expect("arguments must be a string, not an object");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(arguments).expect("valid JSON inside"),
+            serde_json::json!({ "reason": "read the error" })
+        );
+    }
+
+    #[test]
+    fn an_assistant_that_only_called_a_tool_sends_null_content() {
+        // Some endpoints in this family reject `""` alongside `tool_calls`, and null is
+        // what OpenAI's own responses contain.
+        let body = build_request(&with_messages(vec![Message::Assistant {
+            text: String::new(),
+            calls: vec![a_call()],
+        }]));
+        assert!(body["messages"][0]["content"].is_null(), "{body}");
+    }
+
+    #[test]
+    fn a_screenshot_follows_the_tool_result_as_a_user_message() {
+        // The divergence that shapes the neutral type. This family's tool messages
+        // support text only — "For tool messages, only type `text` is supported" — so an
+        // image cannot ride inside the result and follows it instead. One neutral
+        // message therefore becomes two wire messages.
+        let body = build_request(&with_messages(vec![Message::ToolResult {
+            call_id: "call_1".to_string(),
+            text: "Screenshot captured.".to_string(),
+            image: Some(a_screenshot()),
+        }]));
+
+        let messages = body["messages"].as_array().expect("array");
+        assert_eq!(messages.len(), 2, "expected a result then an image: {body}");
+
+        assert_eq!(messages[0]["role"], "tool");
+        assert_eq!(messages[0]["tool_call_id"], "call_1");
+        assert!(
+            messages[0]["content"].is_string(),
+            "a tool message may only carry text"
+        );
+
+        assert_eq!(messages[1]["role"], "user");
+        let url = messages[1]["content"][0]["image_url"]["url"]
+            .as_str()
+            .expect("a data URL");
+        assert!(url.starts_with("data:image/png;base64,"), "{url}");
+        assert!(!url.contains('\n'), "the payload must not be wrapped");
+    }
+
+    #[test]
+    fn a_tool_result_without_an_image_stays_one_message() {
+        let body = build_request(&with_messages(vec![Message::ToolResult {
+            call_id: "call_1".to_string(),
+            text: "no screenshot".to_string(),
+            image: None,
+        }]));
+        assert_eq!(body["messages"].as_array().expect("array").len(), 1);
+    }
     use crate::llm::provider::{Message, TurnRequest};
 
     fn a_request() -> TurnRequest {
@@ -398,6 +617,7 @@ mod tests {
             system: Some("be brief".into()),
             messages: vec![Message::user("hello")],
             max_tokens: 1024,
+            tools: Vec::new(),
         }
     }
 

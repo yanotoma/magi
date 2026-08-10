@@ -874,6 +874,14 @@ pub async fn send_text_turn(
         system: Some(system),
         messages,
         max_tokens: MAX_TOKENS,
+        // Offered to exactly one tier, matching what the system prompt says. A model
+        // that malforms tool syntax must not be handed a definition to malform, and one
+        // that cannot see has nothing to do with a screenshot.
+        tools: if tier.offers_capture_tool() {
+            vec![crate::llm::tools::capture_screen()]
+        } else {
+            Vec::new()
+        },
     };
 
     let provider = registry::build(state.http.clone(), &provider_config, api_key);

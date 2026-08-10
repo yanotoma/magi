@@ -320,6 +320,7 @@ mod tests {
     fn call(name: &str, arguments: serde_json::Value) -> ProbeReply {
         ProbeReply {
             tool_calls: vec![ToolCall {
+                id: "call_1".to_string(),
                 name: name.to_string(),
                 arguments,
             }],
