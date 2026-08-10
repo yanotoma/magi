@@ -147,6 +147,25 @@ fn data_url(image: &Image) -> String {
     )
 }
 
+/// Everything one frame means, in order.
+///
+/// **The only function the stream loop calls.** It exists because the alternative did
+/// not work: `parse_tool_calls` was written, tested directly, and never wired into the
+/// loop, so every tool call was parsed perfectly in the test suite and dropped in
+/// production. Four hundred tests passed and the feature was dead. One entry point makes
+/// that particular mistake unavailable.
+///
+/// Tool fragments come after the text of the same frame, which is the order they occur in
+/// — a chunk carrying both is a model that said something and then reached for a tool.
+pub fn parse_events(frame: &SseFrame) -> Vec<StreamEvent> {
+    let mut events = Vec::new();
+    if let Some(event) = parse_frame(frame) {
+        events.push(event);
+    }
+    events.extend(parse_tool_calls(frame));
+    events
+}
+
 /// Tool-call fragments in one frame, if any.
 ///
 /// Separate from [`parse_frame`] because the arities differ, not for tidiness: a frame
@@ -514,7 +533,7 @@ impl Provider for OpenAiCompatible {
             })?;
 
             for frame in parser.push(&chunk) {
-                if let Some(event) = parse_frame(&frame) {
+                for event in parse_events(&frame) {
                     // A closed receiver means the user dismissed the panel. Stop,
                     // and let the request drop — this is cancellation, not failure.
                     if events.send(event).await.is_err() {
@@ -526,7 +545,7 @@ impl Provider for OpenAiCompatible {
 
         // Servers that close without [DONE] still owe us their last frame.
         for frame in parser.finish() {
-            if let Some(event) = parse_frame(&frame) {
+            for event in parse_events(&frame) {
                 if events.send(event).await.is_err() {
                     return Ok(());
                 }
@@ -563,6 +582,30 @@ impl Provider for OpenAiCompatible {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_stream_entry_point_covers_tool_calls_as_well_as_text() {
+        // The guard for the mistake that shipped: a tool parser written, tested, and
+        // never called by the loop. Anything the loop reads must come through here.
+        let events = parse_events(&frame(
+            r#"{"choices":[{"delta":{"content":"Looking.","tool_calls":[
+                {"index":0,"id":"call_1","function":{"name":"capture_screen","arguments":"{}"}}
+            ]}}]}"#,
+        ));
+
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, StreamEvent::Token(_))),
+            "text was lost: {events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, StreamEvent::ToolStart { .. })),
+            "the tool call was lost: {events:?}"
+        );
+    }
 
     #[test]
     fn a_streamed_tool_call_reassembles_from_the_documented_chunks() {
