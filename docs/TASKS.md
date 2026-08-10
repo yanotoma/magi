@@ -361,6 +361,59 @@ wins", and only the first of those would mean a user has to think about word ord
       detection means re-running detection per window and accepting that a segment
       boundary can land mid-sentence
 
+## Requested: drawing on the screen to point things out
+
+Asked for after agentic capture worked: *"me gustaría que magi sea capaz de dibujar en mi
+monitor... círculos, o flechas, o incluso escribir en mi pantalla para indicarme dónde dar
+click o qué hacer"*.
+
+**Feasible, and the drawing is the easy half.** A transparent, undecorated, always-on-top
+window with cursor events ignored is a shape Tauri already builds — the panel is three of
+those four things — and `set_ignore_cursor_events(true)` is what lets clicks pass through to
+the application underneath. Magi renders in a webview, so an arrow, a circle or a label is
+SVG. Nothing new is needed permission-wise either: pointing at the screen requires no
+Accessibility grant, because nothing is being clicked.
+
+**The hard half is knowing where to draw.** Coordinates have to come from the model, and the
+model saw a downscaled screenshot, so every mark depends on inverting that transform. Two
+things make this more tractable here than it usually is:
+
+- Magi *asks* ScreenCaptureKit for an exact output size rather than resizing afterwards, so
+  the mapping from image pixels back to screen points is exact and known, not inferred.
+  Anthropic's own vision-coordinates guidance names failing to account for the resize as the
+  common cause of coordinate misalignment; that failure mode is closed by construction.
+- The capture already records which display and which window it photographed, so a mark can
+  be placed on the right monitor on a desk with three of them.
+
+What is genuinely unknown is **whether a general vision model can point accurately enough to
+be useful.** Models built for computer use are trained to; a model asked "where is the Save
+button" often answers with coordinates that are close enough to describe and too far off to
+draw on. That is a measurement to make before building the overlay, not an assumption to
+build on — an arrow pointing confidently at the wrong button is worse than a sentence saying
+"the Save button, top right".
+
+Note also what this is: **M9's coordinate problem without M9's risk.** Computer use is this
+plus synthesising input, and the dangerous part is the synthesis. Advising where to click
+while the person clicks is strictly safer than clicking for them, and it may well be the more
+useful feature. Worth considering ahead of M9 rather than as part of it.
+
+- [ ] Measure first: give a model a screenshot with a known target and ask for its
+      coordinates, across several models and window sizes. Record the error in pixels. If
+      the error exceeds the size of a button, the overlay is not worth building yet and the
+      honest feature is a sentence rather than an arrow
+- [ ] An overlay window: transparent, undecorated, always-on-top, `skipTaskbar`, and
+      cursor-events-ignored so it never intercepts a click. One per display, since a mark
+      belongs to the screen it describes
+- [ ] A neutral shape vocabulary — circle, arrow, box, label — with coordinates in the
+      captured image's own pixel space, converted to screen points by Magi rather than by
+      the model. The model should never be asked to reason about Retina scaling or monitor
+      layout, both of which it cannot see
+- [ ] A `point_at` tool for the agentic tier, offered only where the measurement above says
+      the model can hit what it aims at
+- [ ] Marks expire. An arrow left on screen after the answer is stale advice, and stale
+      advice about where to click is worse than none — dismiss on the next question, on
+      Escape, and after a timeout
+
 ## Deferred: what a conversation costs
 
 Requested after watching agentic capture work: *"quiero saber que tan costoso es mantener
