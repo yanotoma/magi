@@ -99,7 +99,9 @@ This is the central design decision and the one that most distinguishes Magi.
 
 ### Why this over capturing every turn
 
-A 1512×982 screenshot costs roughly 1,100 vision tokens on Claude and 1,400 on GPT-4o. Because conversation history is resent on every request, attaching one image per turn makes cost grow **quadratically** with thread length. On local models the same problem appears as prefill latency, several hundred milliseconds per image per turn.
+A 1512×982 screenshot costs **1,944 visual tokens** on Claude — one token per 28×28 pixel patch, so `ceil(1512/28) × ceil(982/28)`. That is over the standard tier's 1,568-token cap, which means Claude resizes it down before charging. Because conversation history is resent on every request, attaching one image per turn makes cost grow **quadratically** with thread length. On local models the same problem appears as prefill latency, several hundred milliseconds per image per turn.
+
+Two consequences that only became clear once this was implemented. Since the server resizes above the cap anyway, downscaling on the client saves *bytes and latency* rather than tokens — and the resent history means those bytes are paid for again every turn. And the cap binds on area, not detail: a full ultra-wide desktop has to shrink to 0.46× to fit, while a single 1440×900 window fits at 1.09×. Same token cost, roughly 2.4× the pixels per character, which is why Magi photographs the focused window by default. See `.claude/skills/screen-capture/SKILL.md`.
 
 Agentic capture inverts the tradeoff: an extra round-trip (~300–800 ms) is paid **only on turns that actually need vision**, instead of paying image cost on turns that do not.
 

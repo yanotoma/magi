@@ -5,7 +5,7 @@ Complete breakdown of what is done and what is pending, across every milestone.
 **Last updated:** 2026-08-10
 **Current phase:** M5 — screen capture & agentic vision, targeting `0.4.0-alpha.1`
 **Current version:** `0.2.0-alpha.2` (released — see [VERSIONING.md](VERSIONING.md))
-**Overall:** 112 / 160 tasks done (70%)
+**Overall:** 113 / 160 tasks done (71%)
 
 Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 
@@ -20,10 +20,10 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 | **M2** | Config & providers | `0.2.0-alpha.1` | 28 | 28 | ✅ Shipped |
 | **M3** | Pre-flight & capability tiers | `0.2.0-alpha.2` | 13 | 14 | ✅ Shipped |
 | **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 27 | 27 | ✅ Shipped |
-| **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 14 | 16 | 🔨 In progress |
+| **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 15 | 16 | ✅ Shipped |
 | **M6** | Session machine & panel UX | `0.5.0-beta.1` | 0 | 16 | ⬜ |
 | **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 14 | ⬜ |
-| — | **v1 total** | `1.0.0` | **112** | **146** | |
+| — | **v1 total** | `1.0.0` | **113** | **146** | |
 | **M8** | v2 — wake word & TTS | `1.1.0` | 0 | 9 | 🔮 Post-v1 |
 | **M9** | v3 — computer use | `1.2.0` | 0 | 5 | 🔮 Post-v1 |
 
@@ -215,7 +215,7 @@ Deliberately not the session state machine, which is M6's. This is the smallest 
 - [x] Emit `magi://captured` so the panel can show a capture indicator — the panel shows "Read <what>" while the turn runs. `Reason::UserAsked` is used for the Settings test button
 - [x] Capture audit log, visible in Settings — a new **Screen** pane (between Voice and Hotkeys) showing the Screen Recording permission row, the list of captures, and a Clear button. The log is in-memory only, never written to disk, and that is deliberate: a persisted list of which windows were open and when is a record of someone's working day, and `config.toml` is meant to be safe to paste into a bug report; a sibling file of window titles would undo that. Each entry carries what was captured, why (either the model's stated reason or the user's own deictic phrase), the time, the pixel dimensions, and the visual-token cost. Bounded at 300 entries, oldest dropped. The empty state says plainly "Magi has not read your screen" rather than rendering an empty table — the absence of captures is a fact worth stating
 - [ ] Extend the deictic heuristic to the remaining nine Settings languages — pt, fr, de, it, nl, ja, zh, ko, ru. A user who selects any of these gets a Tier 2 model that silently never captures, because "no match" is indistinguishable from "nothing to look at". Adding a language is adding rows to a table, but each row must be verified by a speaker of that language and cross-checked against all existing rows for collisions: a word that means "the" in one language and "this" in another would fire on every sentence
-- [ ] Correct the vision token figure in `docs/superpowers/specs/2026-08-06-magi-design.md` section 5 — it states a 1512×982 screenshot costs "roughly 1,100 vision tokens on Claude", but Anthropic's current formula (`ceil(w/28) * ceil(h/28)`, standard-tier cap 1568) yields 1944 for that size. The conclusion is unaffected — images dominate cost — but a stale number in a design doc reads as authoritative and will mislead the next reader
+- [x] Correct the vision token figure in `docs/superpowers/specs/2026-08-06-magi-design.md` section 5 — it states a 1512×982 screenshot costs "roughly 1,100 vision tokens on Claude", but Anthropic's current formula (`ceil(w/28) * ceil(h/28)`, standard-tier cap 1568) yields 1944 for that size. The conclusion is unaffected — images dominate cost — but a stale number in a design doc reads as authoritative and will mislead the next reader
 
 ---
 

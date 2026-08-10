@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.4.0-alpha.1] - 2026-08-10
+
 ### Added
 - **Agentic screen capture.** Ask something that needs a visual answer — "what's this error?", "why does this look off?" — and the model reaches for the screen itself. It photographs what is in front of you, says what it looked at in the panel, and answers from the image. No extra configuration required: the model decides when a screenshot helps, provided it passed the *Agentic capture* check in Settings → Models.
 - **Focused capture by default.** Magi photographs the window in front of you rather than the whole display. A focused window fits the token budget at roughly 1.1×; a full ultra-wide desktop shrinks to 0.46× to fit — same token cost, about 2.4× the pixels per character. The model can ask for the active screen or every monitor when the task calls for it.
@@ -108,7 +110,8 @@ First build. The shell exists; there is nothing intelligent behind it yet.
 - Requires Accessibility permission for the global shortcut
 - Not signed or notarized — there is no downloadable build
 
-[Unreleased]: https://github.com/yanotoma/magi/compare/v0.3.0-alpha.1...HEAD
+[Unreleased]: https://github.com/yanotoma/magi/compare/v0.4.0-alpha.1...HEAD
+[0.4.0-alpha.1]: https://github.com/yanotoma/magi/compare/v0.3.0-alpha.1...v0.4.0-alpha.1
 [0.3.0-alpha.1]: https://github.com/yanotoma/magi/compare/v0.2.0-alpha.2...v0.3.0-alpha.1
 [0.2.0-alpha.2]: https://github.com/yanotoma/magi/compare/v0.2.0-alpha.1...v0.2.0-alpha.2
 [0.2.0-alpha.1]: https://github.com/yanotoma/magi/compare/v0.1.0-alpha.1...v0.2.0-alpha.1
