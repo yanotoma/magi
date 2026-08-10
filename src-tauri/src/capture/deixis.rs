@@ -430,6 +430,30 @@ mod tests {
     }
 
     #[test]
+    fn a_phrase_naming_the_screen_is_distinguishable_from_one_naming_a_thing() {
+        // The Tier 2 path uses this to choose what to photograph, without asking the
+        // model: someone who said "this screen" meant the display, and someone who said
+        // "this error" meant the window in front — which is also the sharper capture, so
+        // the commoner case is the better one. `commands::heuristic_capture` decides by
+        // looking for "screen" or "pantalla" in the reported phrase, which only works if
+        // the longest match is the one returned.
+        for (text, names_the_screen) in [
+            ("what is on this screen", true),
+            ("qué hay en esta pantalla", true),
+            ("what is this error", false),
+            ("qué es este error", false),
+            ("what does this mean", false),
+        ] {
+            let phrase = asks_about_the_screen(text).expect("fires").phrase;
+            assert_eq!(
+                phrase.contains("screen") || phrase.contains("pantalla"),
+                names_the_screen,
+                "{text:?} matched {phrase:?}"
+            );
+        }
+    }
+
+    #[test]
     fn the_language_is_reported_for_the_audit_log() {
         assert_eq!(
             asks_about_the_screen("what is this error").map(|d| d.language),

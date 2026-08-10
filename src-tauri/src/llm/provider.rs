@@ -27,6 +27,14 @@ pub enum Role {
 pub enum Message {
     User {
         text: String,
+
+        /// Screenshots attached to the question itself.
+        ///
+        /// The Tier 2 path, and the reason this is not only a tool-result concern. A model
+        /// that sees but cannot be trusted with tools is never told a tool exists, so Magi
+        /// decides from the user's words and attaches the image before asking — by which
+        /// point there is nothing for the model to call.
+        images: Vec<Image>,
     },
 
     /// What the model said, and any tools it asked for.
@@ -35,10 +43,7 @@ pub enum Message {
     /// turn to be replayed *whole* — dropping the tool-call part and keeping the prose
     /// makes the following result reference a call that is no longer in the history,
     /// which is an error rather than a degradation.
-    Assistant {
-        text: String,
-        calls: Vec<ToolCall>,
-    },
+    Assistant { text: String, calls: Vec<ToolCall> },
 
     /// The answer to one tool call.
     ///
@@ -58,7 +63,18 @@ pub enum Message {
 
 impl Message {
     pub fn user(text: impl Into<String>) -> Self {
-        Message::User { text: text.into() }
+        Message::User {
+            text: text.into(),
+            images: Vec::new(),
+        }
+    }
+
+    /// A question with screenshots attached.
+    pub fn user_seeing(text: impl Into<String>, images: Vec<Image>) -> Self {
+        Message::User {
+            text: text.into(),
+            images,
+        }
     }
 
     pub fn assistant(text: impl Into<String>) -> Self {
@@ -84,7 +100,7 @@ impl Message {
     /// The text of this message, whatever kind it is.
     pub fn text(&self) -> &str {
         match self {
-            Message::User { text }
+            Message::User { text, .. }
             | Message::Assistant { text, .. }
             | Message::ToolResult { text, .. } => text,
         }

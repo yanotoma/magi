@@ -867,7 +867,22 @@ pub async fn send_text_turn(
             _ => Message::user(m.content),
         })
         .collect();
-    messages.push(Message::user(text));
+    // The Tier 2 path. A model that sees but malforms tool calls is never offered a tool,
+    // so Magi decides from the user's own words and attaches the screenshot before asking.
+    // By the time the model reads the question the image is already there and there is
+    // nothing for it to call — which is why `llm::prompt` tells this tier that an image
+    // *may* be attached and never mentions tools at all.
+    let attached = if tier == Tier::Heuristic {
+        heuristic_capture(&app, &text).await
+    } else {
+        Vec::new()
+    };
+
+    messages.push(if attached.is_empty() {
+        Message::user(text)
+    } else {
+        Message::user_seeing(text, attached)
+    });
 
     let request = TurnRequest {
         model,
@@ -1035,6 +1050,75 @@ fn describe(reason: &StopReason) -> Option<String> {
         }
         StopReason::Other(other) => Some(format!("The model stopped: {other}")),
     }
+}
+
+/// Captures the screen when the user's words point at it, for the tier that cannot ask.
+///
+/// Returns an empty list when the words did not point at anything, when the capture failed,
+/// or when there is no screen — every one of which means "ask without an image" rather than
+/// "fail the turn". A Tier 2 model with no screenshot still answers from the conversation,
+/// which is what its system prompt tells it to do.
+async fn heuristic_capture(app: &tauri::AppHandle, text: &str) -> Vec<crate::llm::provider::Image> {
+    use tauri::Manager;
+
+    let Some(deixis) = crate::capture::asks_about_the_screen(text) else {
+        return Vec::new();
+    };
+
+    // The matched phrase chooses the target, which costs nothing because the phrase is
+    // already known: someone who said "this screen" meant the display, and someone who
+    // said "this error" meant the window they are looking at — which is also the sharper
+    // capture, so the common case is the good one.
+    let wants_whole_screen = deixis.phrase.contains("screen") || deixis.phrase.contains("pantalla");
+
+    let screen = Arc::clone(&app.state::<AppState>().screen);
+    let captured = tauri::async_runtime::spawn_blocking(move || {
+        if wants_whole_screen {
+            screen.capture_active_display()
+        } else {
+            screen.capture_focused_window()
+        }
+    })
+    .await;
+
+    let capture = match captured {
+        Ok(Ok(capture)) => capture,
+        Ok(Err(error)) => {
+            // Not surfaced to the user. They did not ask for a screenshot — they asked a
+            // question, and Magi guessed that a picture would help. A guess that failed
+            // should not become an error report about a feature they never invoked.
+            tracing::warn!(%error, phrase = %deixis.phrase, "the heuristic capture failed");
+            return Vec::new();
+        }
+        Err(error) => {
+            tracing::warn!(%error, "the heuristic capture task failed");
+            return Vec::new();
+        }
+    };
+
+    let state = app.state::<AppState>();
+    state.capture_log.record(crate::capture::Entry {
+        at: unix_millis(),
+        subject: capture.subject.clone(),
+        // The phrase that caused it, so the log can say "you said \"this error\"" rather
+        // than leaving the user to wonder what triggered a capture they did not request.
+        reason: crate::llm::tools::Reason::PhraseMatched {
+            phrase: deixis.phrase.clone(),
+            language: deixis.language.to_string(),
+        },
+        width: capture.width,
+        height: capture.height,
+        visual_tokens: capture.visual_tokens(),
+    });
+
+    if let Err(error) = app.emit("magi://captured", capture.subject.describe()) {
+        tracing::warn!(%error, "could not announce the capture");
+    }
+
+    vec![crate::llm::provider::Image {
+        media_type: "image/png",
+        bytes: capture.png,
+    }]
 }
 
 /// Runs one tool call and produces the message that answers it.

@@ -81,8 +81,21 @@ pub fn build_request(request: &TurnRequest) -> serde_json::Value {
 /// divergence the neutral types exist to absorb.
 fn push_message(messages: &mut Vec<serde_json::Value>, message: &Message) {
     match message {
-        Message::User { text } => {
+        Message::User { text, images } if images.is_empty() => {
             messages.push(json!({ "role": "user", "content": text }));
+        }
+
+        Message::User { text, images } => {
+            // An array of parts once there is an image. The text stays first: both
+            // families accept either order, and text-first is the documented convention.
+            let mut content = vec![json!({ "type": "text", "text": text })];
+            content.extend(images.iter().map(|image| {
+                json!({
+                    "type": "image_url",
+                    "image_url": { "url": data_url(image) },
+                })
+            }));
+            messages.push(json!({ "role": "user", "content": content }));
         }
 
         Message::Assistant { text, calls } if calls.is_empty() => {
@@ -588,6 +601,35 @@ impl Provider for OpenAiCompatible {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_question_with_a_screenshot_becomes_content_parts() {
+        // The Tier 2 shape: the image rides on the user's own question, because that tier
+        // is never told a tool exists and the capture has already happened by the time it
+        // reads anything.
+        let body = build_request(&with_messages(vec![Message::user_seeing(
+            "what is this error",
+            vec![a_screenshot()],
+        )]));
+
+        let content = body["messages"][0]["content"].as_array().expect("parts");
+        assert_eq!(content[0]["type"], "text", "text comes first");
+        assert_eq!(content[0]["text"], "what is this error");
+        assert_eq!(content[1]["type"], "image_url");
+        assert!(content[1]["image_url"]["url"]
+            .as_str()
+            .expect("a data URL")
+            .starts_with("data:image/png;base64,"));
+    }
+
+    #[test]
+    fn a_question_without_a_screenshot_stays_a_plain_string() {
+        // Most turns. An array of one text part is accepted everywhere and a plain string
+        // is what every endpoint in this family has always taken, so the common case does
+        // not change shape because a rarer one exists.
+        let body = build_request(&with_messages(vec![Message::user("hello")]));
+        assert!(body["messages"][0]["content"].is_string(), "{body}");
+    }
 
     #[test]
     fn the_stream_entry_point_covers_tool_calls_as_well_as_text() {

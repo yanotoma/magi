@@ -99,10 +99,13 @@ pub fn build_request(request: &TurnRequest) -> serde_json::Value {
 /// `tool_use` block together.
 fn wire_message(message: &Message) -> serde_json::Value {
     match message {
-        Message::User { text } => json!({
-            "role": "user",
-            "content": [json!({ "type": "text", "text": text })],
-        }),
+        Message::User { text, images } => {
+            let mut content = vec![json!({ "type": "text", "text": text })];
+            for image in images {
+                content.push(image_block(image));
+            }
+            json!({ "role": "user", "content": content })
+        }
 
         Message::Assistant { text, calls } => {
             let mut content = Vec::with_capacity(calls.len() + 1);
@@ -530,6 +533,19 @@ impl Provider for Anthropic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_question_with_a_screenshot_carries_an_image_block() {
+        let body = build_request(&with_messages(vec![Message::user_seeing(
+            "what is this error",
+            vec![a_screenshot()],
+        )]));
+
+        let content = body["messages"][0]["content"].as_array().expect("blocks");
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[1]["type"], "image");
+        assert_eq!(content[1]["source"]["media_type"], "image/png");
+    }
 
     #[test]
     fn a_streamed_tool_call_reassembles_from_the_documented_events() {
