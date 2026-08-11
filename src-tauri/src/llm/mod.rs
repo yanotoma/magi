@@ -9,6 +9,7 @@ pub mod anthropic;
 pub mod cache;
 pub mod capability;
 pub mod discovery;
+pub mod history;
 pub mod openai;
 pub mod preflight;
 pub mod probe_image;

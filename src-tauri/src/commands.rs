@@ -749,6 +749,19 @@ pub fn apply_theme(app: &tauri::AppHandle, theme: Theme) {
 /// answer is worse than a long one.
 const MAX_TOKENS: u32 = 4096;
 
+/// How many tokens of conversation history may be sent.
+///
+/// A cap on growth rather than a fit to any particular model, and generous on purpose. What
+/// this exists to stop is a thread that grows until the provider refuses it — which, with a
+/// screenshot resent every turn, arrives sooner than length suggests: six questions with one
+/// image among them have paid for that image six times.
+///
+/// It does not attempt to match a context window, because Magi does not know one. A small
+/// local model with 4k of context will refuse a long thread whether or not this trims it, and
+/// choosing a number small enough for the smallest model would penalise every larger one.
+/// Making it per-provider is the real answer and is recorded as a task.
+const HISTORY_BUDGET: u32 = 16_000;
+
 /// Replaces the standing context sent with every turn.
 #[tauri::command]
 pub async fn set_prompt_context(
@@ -890,6 +903,18 @@ pub async fn send_text_turn(
     } else {
         Message::user_seeing(text, attached)
     });
+
+    // Trimmed after the new question is appended, so the question is part of what is being
+    // budgeted rather than an addition to whatever survived. `fit` never drops the newest
+    // exchange, so the thing just pushed is safe.
+    let before = messages.len();
+    let messages = crate::llm::history::fit(messages, HISTORY_BUDGET);
+    if messages.len() < before {
+        tracing::info!(
+            dropped = before - messages.len(),
+            "trimmed the conversation to fit the history budget"
+        );
+    }
 
     let request = TurnRequest {
         model,
