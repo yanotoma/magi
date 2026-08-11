@@ -12,6 +12,7 @@ pub mod error;
 pub mod hotkey;
 pub mod llm;
 pub mod permissions;
+pub mod session;
 pub mod stt;
 pub mod tray;
 pub mod voice;
