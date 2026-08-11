@@ -5,7 +5,7 @@ Complete breakdown of what is done and what is pending, across every milestone.
 **Last updated:** 2026-08-10
 **Current phase:** M5 — screen capture & agentic vision, targeting `0.4.0-alpha.1`
 **Current version:** `0.2.0-alpha.2` (released — see [VERSIONING.md](VERSIONING.md))
-**Overall:** 129 / 163 tasks done (79%)
+**Overall:** 130 / 163 tasks done (80%)
 
 Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 
@@ -21,9 +21,9 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 | **M3** | Pre-flight & capability tiers | `0.2.0-alpha.2` | 13 | 14 | ✅ Shipped |
 | **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 27 | 27 | ✅ Shipped |
 | **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 15 | 16 | ✅ Shipped |
-| **M6** | Session machine & panel UX | `0.5.0-beta.1` | 16 | 19 | 🔨 In progress |
+| **M6** | Session machine & panel UX | `0.5.0-beta.1` | 17 | 19 | 🔨 In progress |
 | **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 14 | ⬜ |
-| — | **v1 total** | `1.0.0` | **129** | **149** | |
+| — | **v1 total** | `1.0.0` | **130** | **149** | |
 | **M8** | v2 — wake word & TTS | `1.1.0` | 0 | 9 | 🔮 Post-v1 |
 | **M9** | v3 — computer use | `1.2.0` | 0 | 5 | 🔮 Post-v1 |
 
@@ -251,7 +251,7 @@ Deliberately not the session state machine, which is M6's. This is the smallest 
 - [x] Panel — click-outside dismisses, via window focus loss, and **only when nothing is in flight**. Dismissing unconditionally means glancing at another window while Magi is thinking throws the answer away — hostile in a way the user cannot undo, since the thread is gone and the tokens are spent. Escape still closes it at any time for anyone who means it. Guarded against its own hide, which loses focus and would otherwise re-enter the handler
 - [x] Panel — inline error surfaces per failure class, and notices separately from errors — a recording that hit the two-minute cap is worth saying and is not a failure
 - [x] Code-block syntax highlighting, via highlight.js with twelve grammars registered individually rather than its common bundle. It is the one thing in `markdown.ts` allowed to emit HTML, and the guarantee that replaces "cannot emit HTML" is narrower and verified: highlight.js escapes the code it is given, checked by passing `<script>alert(1)</script>` through it and confirming the angle brackets come back escaped with no live tag. Colours are mapped from its classes to a small palette in the panel's own stylesheet rather than importing one of its themes — a theme is forty hex values, which is the drift the tokens exist to prevent, and it is fixed while the panel is always a dark translucent surface
-- [ ] Prompt templates: pre-written user prompts bound to a trigger ("explain this error", "summarise this screen"). Distinct from the system prompt — these are user turns, not instructions, and they belong in the panel UI rather than in the prompt assembler
+- [x] Prompt templates: four pre-written user turns, shown as chips on an empty thread only — they are a way to start, not a toolbar, and under a conversation they would sit between the answer and the follow-up. **Filtered by the backend**, which knows the active model's tier: offering "summarise my screen" to a model that cannot see is the same broken promise as telling one it can look, except the user learns to distrust the buttons rather than the model. One template needs nothing, so the row is never empty — an empty row reads as broken rather than as unsupported. Clicking fills the box and focuses it rather than sending, which keeps one rule across the whole panel: nothing is asked without the user pressing Enter
 
 ---
 

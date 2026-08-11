@@ -1809,6 +1809,21 @@ pub fn clear_capture_log(state: tauri::State<'_, AppState>) -> CommandResult<Cap
     get_capture(state)
 }
 
+/// The one-click questions the active model can actually answer.
+///
+/// Filtered here rather than in the panel, because the panel does not know the model's tier and
+/// should not have to. Offering "summarise my screen" to a model that cannot see is the same
+/// mistake as telling one it can look: a promise the code cannot keep, and the user learns to
+/// distrust the buttons rather than the model.
+#[tauri::command]
+pub fn prompt_templates(
+    app: tauri::AppHandle,
+) -> CommandResult<Vec<crate::llm::templates::Template>> {
+    Ok(crate::llm::templates::for_tier(
+        crate::session::active_tier_of(&app),
+    ))
+}
+
 /// Opens the System Settings pane for a permission.
 ///
 /// Through the OS rather than by instructing the user to navigate there. Sending

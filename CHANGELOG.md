@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+- **One-click questions.** An empty panel offers a few ready-made questions — "Explain this error", "What's on screen?" — and clicking one fills the box so you can add to it before asking. Only the ones your model can actually answer are shown: a model that cannot see the screen is not offered to summarise it
+- **Coloured code.** Code blocks in an answer are syntax-highlighted, in a palette tuned for the panel rather than a theme designed for a white page
+
 ### Changed
 - **Closing the panel no longer throws away the conversation.** Escape, clicking away, the hotkey and the tray menu all just hide it — reopen and your thread is where you left it. Only **Clear** discards. Previously two of those four ended the conversation and two did not, and nothing told you which was which
 - A screenshot Magi took is released from memory five minutes after the panel is closed. The conversation itself is kept: the text is small and is the part worth continuing, while the image is a picture of what was on your screen

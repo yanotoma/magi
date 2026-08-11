@@ -287,7 +287,7 @@ pub fn refresh_shell(app: &tauri::AppHandle) {
     };
 
     let session = state.session.state();
-    let tier = active_tier(app);
+    let tier = active_tier_of(app);
     let panel_visible = app
         .get_webview_window("panel")
         .and_then(|panel| panel.is_visible().ok())
@@ -300,7 +300,7 @@ pub fn refresh_shell(app: &tauri::AppHandle) {
 ///
 /// Read on demand rather than cached on the session: the session is about what is happening
 /// and this is about what is configured, and the two have different lifetimes.
-fn active_tier(app: &tauri::AppHandle) -> Option<Tier> {
+pub fn active_tier_of(app: &tauri::AppHandle) -> Option<Tier> {
     use tauri::Manager;
 
     let state = app.try_state::<crate::commands::AppState>()?;
@@ -339,7 +339,7 @@ pub fn report(app: &tauri::AppHandle, event: Event) {
         .and_then(|panel| panel.is_visible().ok())
         .unwrap_or(false);
 
-    crate::tray::show_state(app, shell_state(moved, active_tier(app), panel_visible));
+    crate::tray::show_state(app, shell_state(moved, active_tier_of(app), panel_visible));
 }
 
 #[cfg(test)]

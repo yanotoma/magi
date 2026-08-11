@@ -394,6 +394,19 @@ export const clearSession = async (): Promise<void> => invoke("clear_session");
 export const onTrimmed = async (handler: (dropped: number) => void) =>
   listen<number>("magi://trimmed", (event) => handler(event.payload));
 
+/** A one-click question, filtered by what the active model can actually do. */
+export type PromptTemplate = { label: string; prompt: string };
+
+/**
+ * The shortcut questions worth offering.
+ *
+ * Filtered by the backend rather than here, because the panel does not know the active model's
+ * tier — and offering "summarise my screen" to a model that cannot see teaches the user to
+ * distrust the buttons rather than the model.
+ */
+export const promptTemplates = async (): Promise<PromptTemplate[]> =>
+  invoke<PromptTemplate[]>("prompt_templates");
+
 export const onSessionState = async (handler: (state: SessionState) => void) =>
   listen<SessionState>("magi://state", (event) => handler(event.payload));
 

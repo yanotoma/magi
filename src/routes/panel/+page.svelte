@@ -13,6 +13,8 @@
     type SessionState,
     onTrimmed,
     clearSession,
+    promptTemplates,
+    type PromptTemplate,
   } from "$lib/ipc";
   import { renderMarkdown } from "$lib/markdown";
   import {
@@ -59,6 +61,18 @@
    *  Shown once and then left alone until the next trim: it describes something that already
    *  happened, so repeating it on every later turn would read as it happening again. */
   let trimmed = $state<number | null>(null);
+
+  /** One-click questions, from the backend so they match what the model can do. */
+  let templates = $state<PromptTemplate[]>([]);
+
+  $effect(() => {
+    // Re-read on every panel open rather than once at startup: the active model can change in
+    // Settings while the panel is closed, and a shortcut offering to read the screen after a
+    // switch to a text-only model is the exact promise this list exists to avoid making.
+    promptTemplates()
+      .then((offered) => (templates = offered))
+      .catch(() => (templates = []));
+  });
 
   // Clicking away dismisses — but only when nothing is in flight.
   //
@@ -324,6 +338,32 @@
       </p>
     {/if}
 
+    {#if conversation.turns.length === 0 && conversation.streaming === null && templates.length}
+      <!--
+        Only on an empty thread. These are a way to start, not a toolbar — leaving them under a
+        conversation would put a row of buttons between the answer and the follow-up.
+
+        Clicking fills the box and focuses it; it does not send. One rule holds across the whole
+        panel: nothing is asked without the user pressing Enter. Voice obeys it because a
+        transcript can be wrong, and these obey it because "explain this error" is often worth a
+        few words of context before it goes.
+      -->
+      <div class="templates">
+        {#each templates as template (template.label)}
+          <button
+            type="button"
+            class="chip"
+            onclick={() => {
+              input = template.prompt;
+              composer?.focus();
+            }}
+          >
+            {template.label}
+          </button>
+        {/each}
+      </div>
+    {/if}
+
     {#if conversation.notice}
       <p class="notice">{conversation.notice}</p>
     {/if}
@@ -494,6 +534,32 @@
 
   /* Quiet, and above the answer. It is a statement about what Magi did, not part of
      what the model said. */
+  /* A row that wraps rather than scrolls: three or four chips fit at 520 points, and a
+     horizontal scroller hides the ones that matter behind a gesture nobody looks for. */
+  .templates {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 0 2px 8px;
+  }
+
+  /* Quieter than the composer and quieter than an answer. They are an offer, not an
+     instruction, and the panel already has enough competing for attention. */
+  .chip {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 999px;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    font-size: 11px;
+    padding: 4px 10px;
+  }
+
+  .chip:hover {
+    background: rgba(255, 255, 255, 0.14);
+  }
+
   .looked {
     font-size: 11px;
     margin: 0 0 6px;
