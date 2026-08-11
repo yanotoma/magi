@@ -35,11 +35,18 @@ pub fn hide_panel(app: &AppHandle) -> Result<(), ShellError> {
 pub fn toggle_panel(app: &AppHandle) -> Result<(), ShellError> {
     let panel = window(app, PANEL)?;
     if panel.is_visible()? {
+        // Hidden, not ended. The thread survives being closed and only **Clear** discards it
+        // — a reversal of the design doc, and the maintainer's call. Escape and clicking away
+        // are easy to trigger by accident, and a conversation lost to a mistaken keypress is
+        // a cost paid every time, against a privacy benefit that matters only when somebody
+        // else is at the machine.
         panel.hide()?;
-    } else {
-        panel.show()?;
-        panel.set_focus()?;
+        crate::session::refresh_shell(app);
+        return Ok(());
     }
+
+    panel.show()?;
+    panel.set_focus()?;
 
     // The menu bar has a mark for the panel being open and had no way to learn about it:
     // until now only a session event made the tray recompute, so opening the panel left the

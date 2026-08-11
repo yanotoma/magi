@@ -383,10 +383,13 @@ export type SessionState =
  *
  * Pairs with `reset()` on the frontend: that clears what the panel shows, this clears what the
  * backend kept — currently the most recent screenshot, held so a follow-up can see what Magi
- * last looked at. A remembered capture surviving a dismissal would be the same broken promise
- * the thread itself was, since the user believes it is gone.
+ * last looked at.
+ *
+ * Called by **Clear** and by nothing else. Closing the panel deliberately keeps the thread,
+ * so the two must not be confused: an image left behind by a Clear would be invisible state
+ * the user believed they had discarded.
  */
-export const dismissSession = async (): Promise<void> => invoke("dismiss_session");
+export const clearSession = async (): Promise<void> => invoke("clear_session");
 
 export const onTrimmed = async (handler: (dropped: number) => void) =>
   listen<number>("magi://trimmed", (event) => handler(event.payload));

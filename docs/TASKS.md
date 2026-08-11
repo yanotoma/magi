@@ -426,6 +426,38 @@ useful feature. Worth considering ahead of M9 rather than as part of it.
       advice about where to click is worse than none — dismiss on the next question, on
       Escape, and after a timeout
 
+## Decided: closing the panel keeps the thread
+
+Reversal of a design-doc decision, at the maintainer's request: *"creo que el hilo no se
+debería descartar a menos que se haga click en clear"*.
+
+The doc says it twice — "dismissing it ends the thread", and "no conversation persistence in
+v1... privacy-preserving default". Implemented that way for one commit and then reversed,
+because the cost is paid more often than the benefit: Escape and clicking away are easy to
+trigger by accident, so discarding there loses a conversation to a mistaken keypress, while
+the privacy it buys only matters when somebody else is at the machine. **Clear** is
+unambiguous, and nobody presses it by accident.
+
+What this changes, and what still holds:
+
+- Closing the panel — by Escape, by clicking away, by the hotkey or from the tray menu — hides
+  it and keeps everything. All four now behave alike; two of them did not, and the difference
+  was invisible.
+- **Clear** discards both halves: the thread the panel shows and the screenshot the backend
+  kept for the next question. A Clear that left an image behind would be invisible state the
+  user believed they had thrown away.
+- Nothing is written to disk. The thread and the capture live in memory and go on quit, so
+  "no conversation persistence" is still true of storage — it is no longer true of dismissal.
+
+- [ ] Correct section 4 and decision 2 of `docs/superpowers/specs/2026-08-06-magi-design.md`,
+      which describe a dismissal that ends the thread. The behaviour is deliberate now, so it
+      is the doc that is wrong
+- [ ] Consider whether a thread that outlives the panel should expire. It currently survives
+      until Clear or quit, which means a screenshot can sit in memory for a working day. An
+      age limit would recover most of the privacy the reversal gave up without charging for a
+      mistaken keypress — but it needs a number, and a number nobody has argued for is worse
+      than none
+
 ## Requested: memory beyond one turn
 
 Asked for after noticing Magi cannot see what it looked at a turn ago: *"en vez de tenerlo

@@ -12,7 +12,7 @@
     onSessionState,
     type SessionState,
     onTrimmed,
-    dismissSession,
+    clearSession,
   } from "$lib/ipc";
   import { renderMarkdown } from "$lib/markdown";
   import {
@@ -187,29 +187,24 @@
     cancelStream();
   };
 
+  const clearThread = async () => {
+    if (busy) await stop();
+    reset();
+    captured = null;
+    trimmed = null;
+    await clearSession().catch(() => {});
+  };
+
   const dismiss = async () => {
     // Stop before hiding: a request left running would keep streaming into a
     // panel nobody is looking at, and still cost tokens.
     if (busy) await stop();
 
-    // And discard the thread, which the design doc promises twice — "dismissing it
-    // ends the thread", and "no conversation persistence in v1... privacy-preserving
-    // default". It was not happening: `reset` existed, was imported, and had no
-    // caller, so dismissing merely hid a conversation that came back on reopening.
-    //
-    // The cost is real and accepted: Escape reaches here, so a mistaken Escape loses
-    // the thread. That is the trade the design made deliberately, and a thread that
-    // quietly outlives its dismissal is the worse failure — the user believes it is
-    // gone, and it is not.
-    reset();
-    captured = null;
-    trimmed = null;
-
-    // The backend keeps the most recent screenshot for the next question. Clearing the
-    // panel's own state and leaving that behind would mean a dismissed thread still had an
-    // image in it — invisible, and exactly the promise this function exists to keep.
-    await dismissSession().catch(() => {});
-
+    // The thread stays. Closing the panel is not ending the conversation — only **Clear**
+    // is. The design doc says otherwise, and this reverses it deliberately: Escape and
+    // clicking away are easy to do by accident, so discarding here charges a real cost every
+    // time it happens for a privacy benefit that only applies when somebody else is at the
+    // machine. Clear is unambiguous; nobody presses it by accident.
     await getCurrentWindow().hide();
   };
 
@@ -246,7 +241,12 @@
   <header data-tauri-drag-region>
     <span class="mark" data-tauri-drag-region>magi</span>
     {#if conversation.turns.length > 0}
-      <button type="button" class="ghost" onclick={reset}>Clear</button>
+      <!--
+        The only thing that discards. It clears both halves — what the panel shows and the
+        screenshot the backend kept for the next question — because a Clear that left an image
+        behind would be invisible state the user believed they had thrown away.
+      -->
+      <button type="button" class="ghost" onclick={clearThread}>Clear</button>
     {/if}
   </header>
 

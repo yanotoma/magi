@@ -173,7 +173,7 @@ pub fn run() {
             commands::open_permission_settings,
             commands::send_text_turn,
             commands::cancel_turn,
-            commands::dismiss_session,
+            commands::clear_session,
         ])
         .on_window_event(|window, event| {
             // Closing a window must never quit a tray app. Hide instead, and let

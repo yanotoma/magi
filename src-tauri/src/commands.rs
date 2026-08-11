@@ -1252,13 +1252,19 @@ fn remember(app: &tauri::AppHandle, capture: Option<&crate::capture::Capture>) {
 
 /// Forgets the thread's backend state.
 ///
-/// Called when the panel is dismissed, alongside the frontend's own `reset`. This is the
-/// command that was dropped from M6 as duplicating what the panel already did — and it earns
-/// its place now, because there is finally backend state that outlives a turn. A remembered
-/// screenshot surviving a dismissal would be the same broken promise the thread itself was:
-/// the user believes it is gone, and it is not.
+/// Called by **Clear**, and by nothing else. Closing the panel does not reach here.
+///
+/// That is a reversal of the design doc, which says dismissing the panel discards the thread
+/// as a privacy-preserving default. The maintainer's call, and a defensible one: Escape and
+/// clicking away are easy to do by accident, and losing a conversation to a mistaken keypress
+/// is a cost paid every time it happens, against a privacy benefit that only matters if
+/// somebody else is at the machine. Clear is unambiguous — nobody presses it by accident.
+///
+/// What the reversal costs is that a thread now outlives the panel being closed, so a
+/// screenshot Magi took stays in memory until Clear or quit. `docs/TASKS.md` carries the note
+/// to correct the design doc.
 #[tauri::command]
-pub fn dismiss_session(app: tauri::AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
+pub fn clear_session(app: tauri::AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
     if let Ok(mut last) = state.last_capture.lock() {
         *last = None;
     }
