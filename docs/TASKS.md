@@ -5,7 +5,7 @@ Complete breakdown of what is done and what is pending, across every milestone.
 **Last updated:** 2026-08-10
 **Current phase:** M5 — screen capture & agentic vision, targeting `0.4.0-alpha.1`
 **Current version:** `0.2.0-alpha.2` (released — see [VERSIONING.md](VERSIONING.md))
-**Overall:** 127 / 163 tasks done (78%)
+**Overall:** 128 / 163 tasks done (79%)
 
 Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 
@@ -21,9 +21,9 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 | **M3** | Pre-flight & capability tiers | `0.2.0-alpha.2` | 13 | 14 | ✅ Shipped |
 | **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 27 | 27 | ✅ Shipped |
 | **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 15 | 16 | ✅ Shipped |
-| **M6** | Session machine & panel UX | `0.5.0-beta.1` | 14 | 19 | 🔨 In progress |
+| **M6** | Session machine & panel UX | `0.5.0-beta.1` | 15 | 19 | 🔨 In progress |
 | **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 14 | ⬜ |
-| — | **v1 total** | `1.0.0` | **127** | **149** | |
+| — | **v1 total** | `1.0.0` | **128** | **149** | |
 | **M8** | v2 — wake word & TTS | `1.1.0` | 0 | 9 | 🔮 Post-v1 |
 | **M9** | v3 — computer use | `1.2.0` | 0 | 5 | 🔮 Post-v1 |
 
@@ -250,7 +250,7 @@ Deliberately not the session state machine, which is M6's. This is the smallest 
 - [x] Panel — text input for typed follow-ups
 - [x] Panel — click-outside dismisses, via window focus loss, and **only when nothing is in flight**. Dismissing unconditionally means glancing at another window while Magi is thinking throws the answer away — hostile in a way the user cannot undo, since the thread is gone and the tokens are spent. Escape still closes it at any time for anyone who means it. Guarded against its own hide, which loses focus and would otherwise re-enter the handler
 - [x] Panel — inline error surfaces per failure class, and notices separately from errors — a recording that hit the two-minute cap is worth saying and is not a failure
-- [ ] Code-block syntax highlighting. Markdown itself is done, with a renderer configured so it *cannot* emit HTML rather than emitting it and sanitising after
+- [x] Code-block syntax highlighting, via highlight.js with twelve grammars registered individually rather than its common bundle. It is the one thing in `markdown.ts` allowed to emit HTML, and the guarantee that replaces "cannot emit HTML" is narrower and verified: highlight.js escapes the code it is given, checked by passing `<script>alert(1)</script>` through it and confirming the angle brackets come back escaped with no live tag. Colours are mapped from its classes to a small palette in the panel's own stylesheet rather than importing one of its themes — a theme is forty hex values, which is the drift the tokens exist to prevent, and it is fixed while the panel is always a dark translucent surface
 - [ ] Prompt templates: pre-written user prompts bound to a trigger ("explain this error", "summarise this screen"). Distinct from the system prompt — these are user turns, not instructions, and they belong in the panel UI rather than in the prompt assembler
 
 ---

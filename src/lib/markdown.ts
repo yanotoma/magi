@@ -12,6 +12,73 @@
  *  and its default.
  */
 import MarkdownIt from "markdown-it";
+import hljs from "highlight.js/lib/core";
+
+// Registered individually rather than importing the "common" bundle, which carries
+// thirty-odd grammars for a panel that answers questions about code someone is looking at.
+// Add a language when a real answer needs it; an unregistered one falls through to plain
+// text, which is a worse rendering rather than a broken one.
+import bash from "highlight.js/lib/languages/bash";
+import css from "highlight.js/lib/languages/css";
+import go from "highlight.js/lib/languages/go";
+import javascript from "highlight.js/lib/languages/javascript";
+import json from "highlight.js/lib/languages/json";
+import python from "highlight.js/lib/languages/python";
+import rust from "highlight.js/lib/languages/rust";
+import sql from "highlight.js/lib/languages/sql";
+import swift from "highlight.js/lib/languages/swift";
+import typescript from "highlight.js/lib/languages/typescript";
+import xml from "highlight.js/lib/languages/xml";
+import yaml from "highlight.js/lib/languages/yaml";
+
+for (const [name, language] of [
+  ["bash", bash],
+  ["css", css],
+  ["go", go],
+  ["javascript", javascript],
+  ["json", json],
+  ["python", python],
+  ["rust", rust],
+  ["sql", sql],
+  ["swift", swift],
+  ["typescript", typescript],
+  ["xml", xml],
+  ["yaml", yaml],
+] as const) {
+  hljs.registerLanguage(name, language);
+}
+
+/**
+ * Highlights a fenced block, or returns `null` to leave it plain.
+ *
+ * ## Why this is allowed to emit HTML when nothing else here is
+ *
+ * The rest of this module's security posture is that the renderer *cannot* produce HTML, so
+ * there is nothing to sanitise. A highlighter breaks that by definition: it works by wrapping
+ * tokens in `span`s. What replaces the guarantee is a narrower one — highlight.js escapes the
+ * code it is given, so the only tags in its output are the ones it added.
+ *
+ * Verified rather than assumed, because its own security wiki warns about unescaped HTML.
+ * Passing `<script>alert(1)</script>` through `hljs.highlight` returns
+ * `&lt;script&gt;alert(1)&lt;/script&gt;` with the angle brackets escaped and no live tag:
+ *
+ *     hljs.highlight('<script>alert(1)</script>', { language: 'javascript' }).value
+ *     // → '&lt;script&gt;<span class="hljs-title function_">alert</span>(…)&lt;/script&gt;'
+ *
+ * Re-run that check before changing versions. It is the whole reason this is safe.
+ */
+const highlight = (code: string, language: string): string | null => {
+  if (!language || !hljs.getLanguage(language)) return null;
+
+  try {
+    // `ignoreIllegals` so a snippet that does not parse is still coloured as far as it got.
+    // A model's code sample is frequently a fragment, and throwing here would drop the whole
+    // block rather than the part that confused the grammar.
+    return hljs.highlight(code, { language, ignoreIllegals: true }).value;
+  } catch {
+    return null;
+  }
+};
 
 const renderer = new MarkdownIt({
   // The whole security posture in one line: raw HTML in the source is escaped
@@ -25,6 +92,16 @@ const renderer = new MarkdownIt({
   // one paragraph, which turns a short list of options into a wall of text.
   breaks: true,
   typographer: false,
+  highlight: (code, language) => {
+    const marked = highlight(code, language);
+    if (marked === null) return "";
+
+    // Returning the wrapper as well as the content, which is what markdown-it's own docs
+    // prescribe: returning only the inner HTML makes it wrap the result again and escape it.
+    // `hljs` is on the `pre` so the panel's stylesheet has one hook rather than one per
+    // token class.
+    return `<pre class="hljs"><code>${marked}</code></pre>`;
+  },
 });
 
 // Images are disabled outright. `![](https://tracker/x.png)` in a reply would

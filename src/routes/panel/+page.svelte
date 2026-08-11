@@ -538,6 +538,56 @@
   .md :global(ul),
   .md :global(ol),
   .md :global(blockquote),
+  /* Syntax colours, mapped from highlight.js's classes rather than imported as one of its
+     themes. Two reasons, and the second is the real one.
+
+     A theme is a stylesheet of forty-odd hex values, which is exactly the drift the tokens
+     in `app.css` exist to prevent. And a theme is fixed, while this panel is the documented
+     exception to those tokens precisely because it composites over an arbitrary desktop —
+     it is always a dark translucent surface, so one palette tuned for that is both simpler
+     and more correct than a theme designed for a white page.
+
+     Grouped by what a reader needs to tell apart, not by what hljs happens to emit. Its
+     class list is long; most of the distinctions are invisible at this size. */
+  .md :global(.hljs-keyword),
+  .md :global(.hljs-selector-tag),
+  .md :global(.hljs-literal),
+  .md :global(.hljs-built_in) {
+    color: rgb(199, 146, 234);
+  }
+
+  .md :global(.hljs-string),
+  .md :global(.hljs-attr),
+  .md :global(.hljs-regexp),
+  .md :global(.hljs-symbol) {
+    color: rgb(153, 209, 148);
+  }
+
+  .md :global(.hljs-number),
+  .md :global(.hljs-meta) {
+    color: rgb(240, 180, 130);
+  }
+
+  .md :global(.hljs-title),
+  .md :global(.hljs-title.function_),
+  .md :global(.hljs-section),
+  .md :global(.hljs-name) {
+    color: rgb(130, 190, 240);
+  }
+
+  .md :global(.hljs-type),
+  .md :global(.hljs-class .hljs-title) {
+    color: rgb(240, 220, 140);
+  }
+
+  /* Comments are the one thing worth making quieter rather than another colour: a reader
+     scanning a snippet for the line that matters should be able to skip them. */
+  .md :global(.hljs-comment),
+  .md :global(.hljs-quote) {
+    color: rgba(255, 255, 255, 0.45);
+    font-style: italic;
+  }
+
   .md :global(pre) {
     margin: 0 0 0.55em;
   }
