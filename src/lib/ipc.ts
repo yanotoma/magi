@@ -356,6 +356,24 @@ export const requestScreenRecording = async (): Promise<CaptureView> =>
  * Carries what was captured, so the panel can say *what* was looked at rather than only
  * that something was. The details — size, cost, why — go to Settings › Screen.
  */
+/**
+ * What Magi is doing, as one value.
+ *
+ * Replaces inferring it from a dozen separate events. The backend is the authority and emits
+ * only when the state changes, so a handler here can assign it straight to a rune without
+ * comparing anything.
+ */
+export type SessionState =
+  | "idle"
+  | "listening"
+  | "transcribing"
+  | "thinking"
+  | "capturing"
+  | "streaming";
+
+export const onSessionState = async (handler: (state: SessionState) => void) =>
+  listen<SessionState>("magi://state", (event) => handler(event.payload));
+
 export const onCaptured = async (handler: (subject: string) => void) =>
   listen<string>("magi://captured", (event) => handler(event.payload));
 

@@ -9,6 +9,8 @@
     sendTextTurn,
     type VoiceState,
     onCaptured,
+    onSessionState,
+    type SessionState,
   } from "$lib/ipc";
   import { renderMarkdown } from "$lib/markdown";
   import {
@@ -41,6 +43,21 @@
    *  in Magi a user would want to notice happening, and the audit log in Settings answers
    *  it afterwards rather than at the moment. Cleared when the turn ends. */
   let captured = $state<string | null>(null);
+
+  /** What the backend says is happening.
+   *
+   *  The authority, replacing what this file used to infer from a dozen separate events.
+   *  Kept alongside the local derivations rather than replacing them wholesale: the panel
+   *  still owns what it *shows*, and this owns what is *true*. Where the two disagree the
+   *  backend wins, because it is the side that knows. */
+  let sessionState = $state<SessionState>("idle");
+
+  $effect(() => {
+    const stop = onSessionState((state) => (sessionState = state));
+    return () => {
+      stop.then((unlisten) => unlisten());
+    };
+  });
 
   $effect(() => {
     // Unsubscribed by the returned function, like the others in this file.
@@ -234,7 +251,14 @@
           {/if}
 
           {#if captured}
-            <p class="looked">Read {captured}</p>
+            <!--
+              Present tense while the capture is happening, past tense after. The backend
+              says which, so the panel no longer has to guess from the arrival of an event
+              that has no matching "finished" counterpart.
+            -->
+            <p class="looked">
+              {sessionState === "capturing" ? "Reading" : "Read"} {captured}
+            </p>
           {/if}
 
           {#if waiting}

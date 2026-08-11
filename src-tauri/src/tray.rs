@@ -29,6 +29,61 @@ pub enum ShellState {
 /// Regenerate with `python3 tools/generate_tray_icon.py`.
 const ICON_IDLE: &[u8] = include_bytes!("../icons/tray/tray-idle.png");
 
+/// The listening and thinking marks, embedded for the same reason as the idle one.
+///
+/// Both existed from M4 and neither had ever been shown, because nothing changed the icon
+/// after startup. Embedded rather than loaded from disk so a missing file is a build error
+/// instead of a menu bar that silently keeps the wrong mark.
+const ICON_LISTENING: &[u8] = include_bytes!("../icons/tray/tray-listening.png");
+const ICON_THINKING: &[u8] = include_bytes!("../icons/tray/tray-thinking.png");
+
+/// The bytes for a state.
+///
+/// `Degraded` falls back to the idle mark, and that is a stated gap rather than an
+/// oversight: `tools/generate_tray_icon.py` records why it has no art — a cancel slash
+/// across three separated nodes reads as nothing at 22 points, because the mark is
+/// discontinuous and every crossing forces a choice between eating the ring and breaking the
+/// bar. Falling back keeps the menu bar honest about what it does know while that is
+/// designed. Showing a wrong mark would be worse than showing a neutral one.
+fn icon_bytes(state: ShellState) -> &'static [u8] {
+    match state {
+        ShellState::Listening => ICON_LISTENING,
+        ShellState::Thinking => ICON_THINKING,
+        ShellState::Idle | ShellState::PanelOpen | ShellState::Degraded => ICON_IDLE,
+    }
+}
+
+/// Shows the mark for `state`.
+///
+/// Silent on failure, deliberately. A tray icon that will not update is a cosmetic problem;
+/// propagating it into the turn that triggered it would turn a wrong glyph into a lost
+/// answer.
+pub fn show_state(app: &tauri::AppHandle, state: ShellState) {
+    let Some(tray) = app.tray_by_id("main") else {
+        tracing::warn!("no tray icon to update");
+        return;
+    };
+
+    let icon = match tauri::image::Image::from_bytes(icon_bytes(state)) {
+        Ok(icon) => icon,
+        Err(error) => {
+            tracing::warn!(%error, ?state, "the tray icon failed to decode");
+            return;
+        }
+    };
+
+    if let Err(error) = tray.set_icon(Some(icon)) {
+        tracing::warn!(%error, ?state, "could not change the tray icon");
+        return;
+    }
+
+    // Re-asserted on every change: `set_icon` resets the template flag on macOS, and
+    // without it the mark is drawn as-is and disappears against a matching menu bar.
+    if let Err(error) = tray.set_icon_as_template(true) {
+        tracing::warn!(%error, "could not restore the template flag");
+    }
+}
+
 /// Maps a state to its icon resource name.
 ///
 /// Pure, so it is testable without a display — which matters because CI has
@@ -43,6 +98,8 @@ pub fn tray_icon_name(state: ShellState) -> &'static str {
         ShellState::Idle | ShellState::PanelOpen => "tray-idle",
         ShellState::Listening => "tray-listening",
         ShellState::Thinking => "tray-thinking",
+        // No file of this name exists yet; `icon_bytes` falls back to the idle mark. The
+        // name is kept so the day the art lands there is one line to change.
         ShellState::Degraded => "tray-degraded",
     }
 }

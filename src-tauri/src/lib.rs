@@ -121,6 +121,7 @@ pub fn run() {
                 screen: std::sync::Arc::new(crate::capture::ScreenCaptureKit::new()),
                 #[cfg(not(target_os = "macos"))]
                 screen: std::sync::Arc::new(crate::capture::FakeCapture::headless()),
+                session: std::sync::Arc::new(crate::session::Session::new()),
                 capture_log: std::sync::Arc::new(crate::capture::CaptureLog::new()),
                 in_flight: Mutex::new(None),
             });

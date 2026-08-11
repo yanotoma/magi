@@ -242,6 +242,55 @@ impl Session {
     }
 }
 
+/// Applies an event and tells everything that shows state about it.
+///
+/// **The only place a session event should be reported from.** One function so the three
+/// things that must agree cannot drift: the stored state, the `magi://state` event the panel
+/// listens to, and the mark in the menu bar. Before this existed the panel inferred its
+/// answer from a dozen events and the tray inferred nothing, which is exactly the drift a
+/// single writer prevents.
+///
+/// Does nothing when the state did not move, so a turn emitting a token per token does not
+/// emit a state event per token.
+pub fn report(app: &tauri::AppHandle, event: Event) {
+    use tauri::{Emitter, Manager};
+
+    let Some(state) = app.try_state::<crate::commands::AppState>() else {
+        return;
+    };
+
+    let Some(moved) = state.session.apply(event) else {
+        return;
+    };
+
+    if let Err(error) = app.emit("magi://state", moved) {
+        tracing::warn!(%error, ?moved, "could not emit the session state");
+    }
+
+    // The tier of the active model, for the resting `Degraded` mark. Read here rather than
+    // cached on the session, because the session is about what is happening and this is
+    // about what is configured — two facts with different lifetimes.
+    let tier = state
+        .config
+        .lock()
+        .ok()
+        .and_then(|config| config.active.clone())
+        .and_then(|active| {
+            state
+                .capabilities
+                .lock()
+                .ok()
+                .and_then(|cache| cache.tier(&active.provider, &active.model))
+        });
+
+    let panel_visible = app
+        .get_webview_window("panel")
+        .and_then(|panel| panel.is_visible().ok())
+        .unwrap_or(false);
+
+    crate::tray::show_state(app, shell_state(moved, tier, panel_visible));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

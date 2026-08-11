@@ -85,6 +85,13 @@ pub struct AppState {
     /// in an editor and paste into bug reports.
     pub models_dir: PathBuf,
 
+    /// What Magi is doing. The one authority, and the only writer of `magi://state`.
+    ///
+    /// `Arc` because events arrive from the hotkey handler, from a `spawn_blocking` worker
+    /// and from the turn task, and none of them should wait on the others for longer than a
+    /// comparison and an assignment.
+    pub session: Arc<crate::session::Session>,
+
     /// The screen. Behind the trait, so the tests that matter — which display was chosen,
     /// how big the result is — need no display attached, and so a Linux build has something
     /// to hold at all.
@@ -902,6 +909,7 @@ pub async fn send_text_turn(
     let provider = registry::build(state.http.clone(), &provider_config, api_key);
 
     let task = tauri::async_runtime::spawn(async move {
+        crate::session::report(&app, crate::session::Event::Asked);
         let mut request = request;
         // One budget for the whole turn, not per request: the point is to bound how many
         // times a model can go round, and a fresh budget each iteration would bound
@@ -923,6 +931,11 @@ pub async fn send_text_turn(
                 while let Some(event) = rx.recv().await {
                     let emitted = match event {
                         StreamEvent::Token(token) => {
+                            // Reported on every token and acted on once: `apply` returns
+                            // `None` when nothing moved, so only the first one becomes a
+                            // state event. Cheaper than tracking "have I reported yet"
+                            // here, and impossible to get wrong.
+                            crate::session::report(&app, crate::session::Event::Answering);
                             // Kept as well as forwarded. The assistant's turn has to be
                             // replayed whole when a tool result follows it, and the panel
                             // is not a place to read it back from.
@@ -964,6 +977,7 @@ pub async fn send_text_turn(
             if let Err(error) = result {
                 let message = error.to_string();
                 tracing::warn!(%message, "turn failed");
+                crate::session::report(&app, crate::session::Event::Stopped);
                 if let Err(error) = app.emit("magi://error", message) {
                     tracing::warn!(%error, "could not emit the turn error");
                 }
@@ -978,6 +992,7 @@ pub async fn send_text_turn(
                 if matches!(stop, StopReason::ToolUse) {
                     tracing::warn!("the model stopped for a tool call and named none");
                 }
+                crate::session::report(&app, crate::session::Event::Answered);
                 if let Err(error) = app.emit("magi://turn-done", describe(&stop)) {
                     tracing::warn!(%error, "could not emit the turn completion");
                 }
@@ -1023,7 +1038,8 @@ pub struct TurnMessage {
 
 /// Cancels the turn in flight, if there is one.
 #[tauri::command]
-pub fn cancel_turn(state: State<'_, AppState>) -> CommandResult<()> {
+pub fn cancel_turn(app: tauri::AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
+    crate::session::report(&app, crate::session::Event::Stopped);
     let mut in_flight = state.in_flight.lock().map_err(to_message)?;
     if let Some(task) = in_flight.take() {
         // Aborting drops the receiver, so the provider stops on its next send
@@ -1065,6 +1081,8 @@ async fn heuristic_capture(app: &tauri::AppHandle, text: &str) -> Vec<crate::llm
         return Vec::new();
     };
 
+    crate::session::report(app, crate::session::Event::Looking);
+
     // The matched phrase chooses the target, which costs nothing because the phrase is
     // already known: someone who said "this screen" meant the display, and someone who
     // said "this error" meant the window they are looking at — which is also the sharper
@@ -1080,6 +1098,8 @@ async fn heuristic_capture(app: &tauri::AppHandle, text: &str) -> Vec<crate::llm
         }
     })
     .await;
+
+    crate::session::report(app, crate::session::Event::Looked);
 
     let capture = match captured {
         Ok(Ok(capture)) => capture,
@@ -1160,6 +1180,11 @@ async fn answer_call(
     let reason = crate::llm::tools::Reason::from_tool_arguments(&call.arguments);
     let target = crate::llm::tools::Target::from_tool_arguments(&call.arguments);
 
+    // Bracketed, so the indicator says "looking" for exactly as long as it is true. The
+    // `Looked` below runs on every path out of here, including the failures, because a
+    // capture that did not work still stopped happening.
+    crate::session::report(app, crate::session::Event::Looking);
+
     // `spawn_blocking`, because a capture is a synchronous round trip through the window
     // server. Holding a runtime worker for it starves everything else that runtime polls.
     let screen = Arc::clone(&app.state::<AppState>().screen);
@@ -1184,6 +1209,8 @@ async fn answer_call(
     .await
     .map_err(|error| error.to_string())
     .and_then(|result| result.map_err(|error| error.to_string()));
+
+    crate::session::report(app, crate::session::Event::Looked);
 
     let (captures, windows) = match gathered {
         Ok(gathered) => gathered,
