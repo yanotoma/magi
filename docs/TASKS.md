@@ -426,6 +426,45 @@ useful feature. Worth considering ahead of M9 rather than as part of it.
       advice about where to click is worse than none — dismiss on the next question, on
       Escape, and after a timeout
 
+## Requested: memory beyond one turn
+
+Asked for after noticing Magi cannot see what it looked at a turn ago: *"en vez de tenerlo
+todo en memoria, podríamos agregar un sistema de memoria? como un RAG o engram o sqlite?"*
+
+**First, what is actually broken.** The panel resends history as `{role, content}` only, so
+screenshots exist just inside the turn that took them. That was never decided — `Turn` in
+`conversation.svelte.ts` has no field for an image — and it has two consequences worth
+separating. The design doc's cost argument, that an image attached once is paid for on every
+later turn, **does not describe this implementation**: images are not resent, so the
+quadratic growth it warns about is not happening. And a follow-up question about a screen
+Magi just read cannot see it, which is the part that is genuinely wrong.
+
+**Why storage is the wrong first tool.** SQLite solves persistence, not relevance: the whole
+conversation is already in memory, and the limit is what fits in a request rather than what is
+kept. RAG solves relevance but needs embeddings — either another local model on the scale of
+whisper, or a remote API, which sends the text of someone's conversations off the machine and
+contradicts the reason the capture log is memory-only. Both also miss the thing being
+forgotten: it is an image, and there is no useful way to retrieve a screenshot by similarity.
+What would be stored is a text description, which is what the model's own answer already is.
+
+Cheapest first, and each step is useful without the next:
+
+- [ ] Carry the most recent capture into the following turn. Fixes the actual symptom — "and
+      what does this mean?" about the screen just shown — with a fixed ceiling rather than
+      growth, and no storage, no embeddings, no new dependency. `Turn` needs a field for it
+      and `historyForRequest` needs to send it
+- [ ] Summarise instead of truncating when the budget bites. Ask the configured model to
+      condense the oldest exchanges into a paragraph and send that in their place. Uses the
+      model already there; no new infrastructure. `llm::history::fit` is where the decision
+      to drop currently lives, and is where the choice to summarise belongs
+- [ ] Correct the design doc's cost argument in section 5, which describes resent images that
+      are not resent. Either the behaviour or the doc is wrong, and right now it is the doc
+- [ ] Only then, persistence across sessions — which the design doc already places in v2 and
+      calls an opt-in, because a stored conversation is a record of what someone was doing all
+      day and their questions about it. SQLite for storage when it happens; embeddings only if
+      retrieval proves necessary after summarisation, and local ones, or the privacy promise
+      goes with them
+
 ## Deferred: what a conversation costs
 
 Requested after watching agentic capture work: *"quiero saber que tan costoso es mantener
