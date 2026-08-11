@@ -60,6 +60,27 @@
    *  happened, so repeating it on every later turn would read as it happening again. */
   let trimmed = $state<number | null>(null);
 
+  // Clicking away dismisses — but only when nothing is in flight.
+  //
+  // The guard is the whole design here. Dismissing on focus loss unconditionally means
+  // glancing at another window while Magi is thinking throws the answer away, which is
+  // hostile in a way the user cannot undo: the thread is gone and the tokens are spent. A
+  // panel that stays put until the answer lands is the lesser surprise, and Escape still
+  // closes it at any time for anyone who means it.
+  $effect(() => {
+    const unlisten = getCurrentWindow().onFocusChanged(async ({ payload: focused }) => {
+      if (focused || busy) return;
+
+      // Hiding the window loses focus, so `dismiss` triggers this handler again. Checking
+      // visibility first is what keeps that from being a second pointless pass through
+      // `reset` and `dismissSession`.
+      if (await getCurrentWindow().isVisible()) await dismiss();
+    });
+    return () => {
+      unlisten.then((stop) => stop());
+    };
+  });
+
   $effect(() => {
     const stop = onTrimmed((dropped) => (trimmed = dropped));
     return () => {

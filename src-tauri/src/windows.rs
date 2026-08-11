@@ -40,6 +40,11 @@ pub fn toggle_panel(app: &AppHandle) -> Result<(), ShellError> {
         panel.show()?;
         panel.set_focus()?;
     }
+
+    // The menu bar has a mark for the panel being open and had no way to learn about it:
+    // until now only a session event made the tray recompute, so opening the panel left the
+    // icon showing whatever it happened to be showing.
+    crate::session::refresh_shell(app);
     Ok(())
 }
 

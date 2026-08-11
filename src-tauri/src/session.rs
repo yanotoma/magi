@@ -242,6 +242,42 @@ impl Session {
     }
 }
 
+/// Refreshes the menu bar without changing the session state.
+///
+/// For the facts that change independently of what Magi is doing: the panel opening or
+/// closing, and the active model changing. [`shell_state`] takes all three, and until this
+/// existed only a session event could make the tray recompute — so opening the panel left the
+/// icon showing whatever it had been showing.
+pub fn refresh_shell(app: &tauri::AppHandle) {
+    use tauri::Manager;
+
+    let Some(state) = app.try_state::<crate::commands::AppState>() else {
+        return;
+    };
+
+    let session = state.session.state();
+    let tier = active_tier(app);
+    let panel_visible = app
+        .get_webview_window("panel")
+        .and_then(|panel| panel.is_visible().ok())
+        .unwrap_or(false);
+
+    crate::tray::show_state(app, shell_state(session, tier, panel_visible));
+}
+
+/// The tier of the model currently selected, if it has been probed.
+///
+/// Read on demand rather than cached on the session: the session is about what is happening
+/// and this is about what is configured, and the two have different lifetimes.
+fn active_tier(app: &tauri::AppHandle) -> Option<Tier> {
+    use tauri::Manager;
+
+    let state = app.try_state::<crate::commands::AppState>()?;
+    let active = state.config.lock().ok()?.active.clone()?;
+    let cache = state.capabilities.lock().ok()?;
+    cache.tier(&active.provider, &active.model)
+}
+
 /// Applies an event and tells everything that shows state about it.
 ///
 /// **The only place a session event should be reported from.** One function so the three
@@ -267,28 +303,12 @@ pub fn report(app: &tauri::AppHandle, event: Event) {
         tracing::warn!(%error, ?moved, "could not emit the session state");
     }
 
-    // The tier of the active model, for the resting `Degraded` mark. Read here rather than
-    // cached on the session, because the session is about what is happening and this is
-    // about what is configured — two facts with different lifetimes.
-    let tier = state
-        .config
-        .lock()
-        .ok()
-        .and_then(|config| config.active.clone())
-        .and_then(|active| {
-            state
-                .capabilities
-                .lock()
-                .ok()
-                .and_then(|cache| cache.tier(&active.provider, &active.model))
-        });
-
     let panel_visible = app
         .get_webview_window("panel")
         .and_then(|panel| panel.is_visible().ok())
         .unwrap_or(false);
 
-    crate::tray::show_state(app, shell_state(moved, tier, panel_visible));
+    crate::tray::show_state(app, shell_state(moved, active_tier(app), panel_visible));
 }
 
 #[cfg(test)]
