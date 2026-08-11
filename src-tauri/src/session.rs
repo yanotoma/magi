@@ -242,6 +242,37 @@ impl Session {
     }
 }
 
+/// Opens the panel, or closes it.
+///
+/// The one place that knows what that entails, which is why it is here rather than in
+/// `windows`: `CLAUDE.md` makes this module the only one allowed to know about the others, and
+/// window handling briefly grew a dependency on `commands` and on this file because that is
+/// where the window handle already was.
+///
+/// M6's task list called this `toggle_session` and described it as moving the state machine
+/// out of `Idle`. That came from the original interaction model, where one hotkey opened the
+/// panel *and* the microphone; M2 split those in two. Opening a window is not an activity, so
+/// the session state is deliberately left alone — [`SessionState`] is about what Magi is
+/// doing, and the panel being open is reported through [`ShellState::PanelOpen`] instead.
+pub fn toggle_panel(app: &tauri::AppHandle) -> Result<(), crate::error::ShellError> {
+    if crate::windows::panel_is_visible(app)? {
+        // Hidden, not ended. The thread survives closing and only Clear discards it.
+        crate::windows::hide_panel(app)?;
+        // The thread stays; the screenshot does not stay forever. Five minutes closed and the
+        // image is released — long enough to look something up and come back, short enough
+        // that a picture of the screen is not still in memory after lunch.
+        crate::commands::expire_capture_later(app);
+    } else {
+        crate::windows::show_panel(app)?;
+        crate::commands::cancel_capture_expiry(app);
+    }
+
+    // Either way the menu bar has something new to say: it has a mark for the panel being
+    // open, and until `refresh_shell` existed only a session event made it recompute.
+    refresh_shell(app);
+    Ok(())
+}
+
 /// Refreshes the menu bar without changing the session state.
 ///
 /// For the facts that change independently of what Magi is doing: the panel opening or

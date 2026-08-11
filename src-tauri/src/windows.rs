@@ -3,6 +3,12 @@
 //! Both windows are declared in `tauri.conf.json` and start hidden. Nothing here
 //! creates a window at runtime — declaring them up front means a missing window
 //! is a configuration error caught at startup rather than a silent no-op later.
+//!
+//! A leaf. Windows are shown, hidden and focused here and nothing else is decided: what
+//! opening or closing the panel *means* — the menu bar mark, the screenshot that expires —
+//! lives in `session`, which `CLAUDE.md` names as the only module allowed to know about the
+//! others. This file briefly did know, and the leak is worth naming: orchestration is easiest
+//! to put wherever the window handle already is.
 
 use crate::error::ShellError;
 use tauri::{AppHandle, Manager, WebviewWindow};
@@ -25,39 +31,18 @@ pub fn show_panel(app: &AppHandle) -> Result<(), ShellError> {
     Ok(())
 }
 
+/// Hides the panel, and only that.
+///
+/// What *else* closing the panel entails — the screenshot that expires, the menu bar mark —
+/// belongs to `session::toggle_panel`. This module is not allowed to know those things exist.
 pub fn hide_panel(app: &AppHandle) -> Result<(), ShellError> {
     window(app, PANEL)?.hide()?;
     Ok(())
 }
 
-/// Flips the panel's visibility. Both the tray icon and the global hotkey route
-/// here, so there is one definition of what "toggle" means.
-pub fn toggle_panel(app: &AppHandle) -> Result<(), ShellError> {
-    let panel = window(app, PANEL)?;
-    if panel.is_visible()? {
-        // Hidden, not ended. The thread survives being closed and only **Clear** discards it
-        // — a reversal of the design doc, and the maintainer's call. Escape and clicking away
-        // are easy to trigger by accident, and a conversation lost to a mistaken keypress is
-        // a cost paid every time, against a privacy benefit that matters only when somebody
-        // else is at the machine.
-        panel.hide()?;
-        // The thread stays; the screenshot does not stay forever. Five minutes closed and the
-        // image is released — long enough to look something up and come back, short enough
-        // that a picture of the screen is not still in memory after lunch.
-        crate::commands::expire_capture_later(app);
-        crate::session::refresh_shell(app);
-        return Ok(());
-    }
-
-    panel.show()?;
-    panel.set_focus()?;
-    crate::commands::cancel_capture_expiry(app);
-
-    // The menu bar has a mark for the panel being open and had no way to learn about it:
-    // until now only a session event made the tray recompute, so opening the panel left the
-    // icon showing whatever it happened to be showing.
-    crate::session::refresh_shell(app);
-    Ok(())
+/// Whether the panel is on screen.
+pub fn panel_is_visible(app: &AppHandle) -> Result<bool, ShellError> {
+    Ok(window(app, PANEL)?.is_visible()?)
 }
 
 pub fn show_settings(app: &AppHandle) -> Result<(), ShellError> {

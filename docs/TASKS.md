@@ -5,7 +5,7 @@ Complete breakdown of what is done and what is pending, across every milestone.
 **Last updated:** 2026-08-10
 **Current phase:** M5 — screen capture & agentic vision, targeting `0.4.0-alpha.1`
 **Current version:** `0.2.0-alpha.2` (released — see [VERSIONING.md](VERSIONING.md))
-**Overall:** 128 / 163 tasks done (79%)
+**Overall:** 129 / 163 tasks done (79%)
 
 Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 
@@ -21,9 +21,9 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 | **M3** | Pre-flight & capability tiers | `0.2.0-alpha.2` | 13 | 14 | ✅ Shipped |
 | **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 27 | 27 | ✅ Shipped |
 | **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 15 | 16 | ✅ Shipped |
-| **M6** | Session machine & panel UX | `0.5.0-beta.1` | 15 | 19 | 🔨 In progress |
+| **M6** | Session machine & panel UX | `0.5.0-beta.1` | 16 | 19 | 🔨 In progress |
 | **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 14 | ⬜ |
-| — | **v1 total** | `1.0.0` | **128** | **149** | |
+| — | **v1 total** | `1.0.0` | **129** | **149** | |
 | **M8** | v2 — wake word & TTS | `1.1.0` | 0 | 9 | 🔮 Post-v1 |
 | **M9** | v3 — computer use | `1.2.0` | 0 | 5 | 🔮 Post-v1 |
 
@@ -226,7 +226,7 @@ Deliberately not the session state machine, which is M6's. This is the smallest 
 - [x] Conversation thread held in memory; discarded on dismiss. The discard was missing until M6 began: `reset` existed, was imported by the panel, and had no caller, so dismissing hid a thread that returned on reopening — against a design-doc promise made twice, and a privacy one at that
 - [x] History assembly with a token budget and truncation strategy. Drops whole *exchanges* oldest-first, never a message: both APIs reject a tool call with no matching result, so splitting one would break the request rather than shorten the conversation. It stops rather than skips, since a thread missing a turn from its middle reads as the user having changed the subject and back. The newest exchange always survives — an over-budget request at least produces the provider's own error, while sending nothing answers a question nobody asked. Text is over-estimated on purpose; images are exact, read from the PNG header Magi itself wrote
 - [ ] Make the history budget per-provider. It is one conservative constant today, which bounds growth but matches no particular context window — Magi does not know one. A 4k local model will still refuse a long thread, and choosing a number small enough for it would penalise every larger model
-- [ ] `toggle_session` — the hotkey action that moves the state machine out of Idle. `send_text_turn` and `cancel_turn` already exist and are wired. `dismiss_session` **exists after all**: it was dropped as duplicating what the panel does, and keeping the last capture gave it backend state to clear. A remembered screenshot surviving a dismissal would be the same broken promise the thread itself was
+- [x] The panel toggle lives in `session` — renamed from this task's `toggle_session`, which described moving the state machine out of `Idle`. That came from the original interaction model where one hotkey opened the panel *and* the microphone; M2 split them. Opening a window is not an activity, so the session state is deliberately untouched and the panel being open is reported through `ShellState::PanelOpen`. What the task was really about is layering: `windows.rs` had grown calls into `commands` and `session`, because orchestration is easiest to put wherever the window handle already is, and `CLAUDE.md` makes `session.rs` the only module allowed to know about the others. It is a leaf again
 - [x] Emit `magi://state` from the session machine. `magi://token` and `magi://error` already exist — as do nine more events added since this was written, which is itself the argument for one state event rather than a growing vocabulary the panel has to infer from
 - [x] Cancellation — dismissing mid-stream actually aborts the request. `dismiss()` calls `stop()`, which is `cancelTurn()` plus `cancelStream()`; the backend aborts the task, which drops the receiver so the provider stops on its next send. Both halves are needed — an aborted task cannot emit a completion, so nothing would clear the streaming state and the panel would sit showing Stop
 - [x] Unit tests for every state transition, including error paths. Exhaustive over states × events, so a new variant cannot be added without them noticing, and the ways a busy state may reach `Idle` are listed explicitly — anything else arriving there is a bug, and anything added to the list is a decision

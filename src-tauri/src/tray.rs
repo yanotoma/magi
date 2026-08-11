@@ -144,7 +144,7 @@ pub fn init(app: &tauri::App) -> Result<(), ShellError> {
         .on_menu_event(|app, event| match event.id().as_ref() {
             "open" => log_if_err(
                 "toggle panel from tray menu",
-                crate::windows::toggle_panel(app),
+                crate::session::toggle_panel(app),
             ),
             "settings" => log_if_err("open settings", crate::windows::show_settings(app)),
             "quit" => app.exit(0),
@@ -159,7 +159,7 @@ pub fn init(app: &tauri::App) -> Result<(), ShellError> {
             {
                 log_if_err(
                     "toggle panel from tray click",
-                    crate::windows::toggle_panel(tray.app_handle()),
+                    crate::session::toggle_panel(tray.app_handle()),
                 );
             }
         })
