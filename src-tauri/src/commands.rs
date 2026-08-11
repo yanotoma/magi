@@ -100,6 +100,19 @@ pub struct AppState {
     /// megabytes out to the webview so it could send them back is the obvious wrong shape.
     pub last_capture: Mutex<Option<RememberedCapture>>,
 
+    /// When the panel was last hidden, or `None` while it is open.
+    ///
+    /// Exists so the remembered screenshot can expire. A thread that survives being closed —
+    /// which is what the maintainer asked for — means a picture of someone's screen could
+    /// otherwise sit in memory for a working day.
+    ///
+    /// A timestamp *and* a timer, because either alone is wrong. A timer that fires five
+    /// minutes after closing would also fire five minutes after a close that was followed by
+    /// reopening and closing again thirty seconds ago. Checking the timestamp when it fires is
+    /// what keeps the expiry honest; the timer is what actually frees the memory rather than
+    /// waiting for someone to ask.
+    pub panel_hidden_at: Mutex<Option<std::time::Instant>>,
+
     /// What Magi is doing. The one authority, and the only writer of `magi://state`.
     ///
     /// `Arc` because events arrive from the hotkey handler, from a `spawn_blocking` worker
@@ -1247,6 +1260,81 @@ fn remember(app: &tauri::AppHandle, capture: Option<&crate::capture::Capture>) {
             describes: capture.subject.describe(),
             png: capture.png.clone(),
         });
+    }
+}
+
+/// How long a remembered screenshot outlives the panel being closed.
+///
+/// Five minutes, which the maintainer chose and which reads as the right shape: long enough
+/// that closing the panel to look at something and coming back keeps the context, short enough
+/// that a picture of someone's screen is not still in memory after lunch.
+///
+/// The conversation itself does not expire — only the image. The text is small and is the part
+/// worth continuing; the image is megabytes and is the part that is a photograph of what
+/// somebody was doing.
+pub const CAPTURE_LIFETIME: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+/// Starts the clock on the remembered screenshot.
+///
+/// Called when the panel is hidden. Spawns a task rather than only recording the time, because
+/// the point is to free the memory: a lazy check on next use would leave several megabytes
+/// sitting there for as long as nobody reopened the panel, which is exactly the case being
+/// guarded against.
+pub fn expire_capture_later(app: &tauri::AppHandle) {
+    use tauri::Manager;
+
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(mut hidden) = state.panel_hidden_at.lock() {
+            *hidden = Some(std::time::Instant::now());
+        }
+    }
+
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(CAPTURE_LIFETIME).await;
+
+        let Some(state) = app.try_state::<AppState>() else {
+            return;
+        };
+
+        // Re-checked rather than trusted. This task cannot be cancelled by reopening the
+        // panel, so it has to establish for itself that the panel is still closed and has
+        // been for the whole lifetime — otherwise a close, a reopen and a second close would
+        // have the first task expire the second one's screenshot early.
+        // Copied out of the guard, not borrowed through it: the lock guard would otherwise
+        // live to the end of the expression and outlive the `State` it came from.
+        let hidden_at = match state.panel_hidden_at.lock() {
+            Ok(hidden) => *hidden,
+            Err(_) => return,
+        };
+
+        let expired = hidden_at.is_some_and(|hidden| hidden.elapsed() >= CAPTURE_LIFETIME);
+
+        if !expired {
+            return;
+        }
+
+        // The lock guard is taken and dropped inside the `match` rather than in a trailing
+        // `if let`, whose temporaries would outlive the `State` borrow they came from.
+        let released = match state.last_capture.lock() {
+            Ok(mut last) => last.take().is_some(),
+            Err(_) => false,
+        };
+
+        if released {
+            tracing::debug!("released the remembered screenshot");
+        }
+    });
+}
+
+/// Stops the clock, because the panel is open again.
+pub fn cancel_capture_expiry(app: &tauri::AppHandle) {
+    use tauri::Manager;
+
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(mut hidden) = state.panel_hidden_at.lock() {
+            *hidden = None;
+        }
     }
 }
 

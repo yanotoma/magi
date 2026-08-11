@@ -80,7 +80,11 @@ response streams into the panel thread
 user types or speaks a follow-up, or dismisses with Esc
 ```
 
-The panel is a transparent, undecorated, always-on-top window holding a conversation thread. It supports voice and typed follow-ups. Dismissing it ends the thread.
+The panel is a transparent, undecorated, always-on-top window holding a conversation thread. It supports voice and typed follow-ups. **Closing it keeps the thread; only Clear discards it.**
+
+That reverses an earlier decision, and the reason is worth keeping. Escape, clicking away, the hotkey and the tray menu are all easy to trigger by accident, so discarding on any of them charges a real cost every time it happens — a lost conversation — against a privacy benefit that only applies when somebody else is at the machine. Clear is unambiguous.
+
+What survives is the *text*. A screenshot Magi took is released five minutes after the panel is closed, because the conversation is small and worth continuing while the image is megabytes and is a photograph of what somebody was doing.
 
 **Explicitly out of v1:** wake word, TTS, computer use, conversation history across sessions.
 
@@ -308,7 +312,9 @@ User-visible failures are classified and each has a defined surface:
 Recorded explicitly so they can be challenged in review rather than discovered later:
 
 1. **License: Apache-2.0** — chosen over MIT for its explicit patent grant, which matters for a project that may accept corporate contributions.
-2. **No conversation persistence in v1.** Dismissing the panel discards the thread. Privacy-preserving default; persistence becomes opt-in in v2.
+2. **No conversation persistence in v1.** Nothing is written to disk: the thread and any screenshot live in memory and go when Magi quits. Persistence across sessions becomes opt-in in v2.
+
+   Revised on the point of dismissal. This originally said closing the panel discards the thread, as a privacy-preserving default; it does not, because the cost of losing a conversation to a mistaken Escape is paid far more often than the benefit. **Clear** discards, and a remembered screenshot expires five minutes after closing — which recovers most of the privacy without charging for an accident.
 3. **Default hotkey `Alt+Space`**, configurable. Low conflict rate on macOS.
 4. **Default capture target is the active display**, not all displays. Multi-display users get one image, not three.
 5. **Whisper model is downloaded on first run**, not bundled, to keep the installer small. `base.en` by default, with `small` and `medium` selectable.

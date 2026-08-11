@@ -123,6 +123,7 @@ pub fn run() {
                 screen: std::sync::Arc::new(crate::capture::FakeCapture::headless()),
                 session: std::sync::Arc::new(crate::session::Session::new()),
                 last_capture: Mutex::new(None),
+                panel_hidden_at: Mutex::new(None),
                 capture_log: std::sync::Arc::new(crate::capture::CaptureLog::new()),
                 in_flight: Mutex::new(None),
             });

@@ -449,14 +449,15 @@ What this changes, and what still holds:
 - Nothing is written to disk. The thread and the capture live in memory and go on quit, so
   "no conversation persistence" is still true of storage — it is no longer true of dismissal.
 
-- [ ] Correct section 4 and decision 2 of `docs/superpowers/specs/2026-08-06-magi-design.md`,
-      which describe a dismissal that ends the thread. The behaviour is deliberate now, so it
-      is the doc that is wrong
-- [ ] Consider whether a thread that outlives the panel should expire. It currently survives
-      until Clear or quit, which means a screenshot can sit in memory for a working day. An
-      age limit would recover most of the privacy the reversal gave up without charging for a
-      mistaken keypress — but it needs a number, and a number nobody has argued for is worse
-      than none
+- [x] Correct section 4 and decision 2 of `docs/superpowers/specs/2026-08-06-magi-design.md`,
+      which described a dismissal that ends the thread
+- [x] Expire the remembered screenshot five minutes after the panel is closed. The
+      *conversation* does not expire — the text is small and is the part worth continuing,
+      while the image is megabytes and is a photograph of what somebody was doing. A timestamp
+      **and** a timer: a timer alone would fire five minutes after a close that was followed by
+      a reopen and a second close thirty seconds ago, and a timestamp alone would leave the
+      memory held until somebody happened to ask for it — which is the case being guarded
+      against
 
 ## Requested: memory beyond one turn
 

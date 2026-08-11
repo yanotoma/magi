@@ -6,6 +6,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Changed
+- **Closing the panel no longer throws away the conversation.** Escape, clicking away, the hotkey and the tray menu all just hide it — reopen and your thread is where you left it. Only **Clear** discards. Previously two of those four ended the conversation and two did not, and nothing told you which was which
+- A screenshot Magi took is released from memory five minutes after the panel is closed. The conversation itself is kept: the text is small and is the part worth continuing, while the image is a picture of what was on your screen
+
+
 ## [0.4.0-alpha.1] - 2026-08-10
 
 ### Added

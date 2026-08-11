@@ -41,12 +41,17 @@ pub fn toggle_panel(app: &AppHandle) -> Result<(), ShellError> {
         // a cost paid every time, against a privacy benefit that matters only when somebody
         // else is at the machine.
         panel.hide()?;
+        // The thread stays; the screenshot does not stay forever. Five minutes closed and the
+        // image is released — long enough to look something up and come back, short enough
+        // that a picture of the screen is not still in memory after lunch.
+        crate::commands::expire_capture_later(app);
         crate::session::refresh_shell(app);
         return Ok(());
     }
 
     panel.show()?;
     panel.set_focus()?;
+    crate::commands::cancel_capture_expiry(app);
 
     // The menu bar has a mark for the panel being open and had no way to learn about it:
     // until now only a session event made the tray recompute, so opening the panel left the
