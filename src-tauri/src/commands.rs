@@ -934,7 +934,16 @@ pub async fn send_text_turn(
         // that malforms tool syntax must not be handed a definition to malform, and one
         // that cannot see has nothing to do with a screenshot.
         tools: if tier.offers_capture_tool() {
-            vec![crate::llm::tools::capture_screen()]
+            // Counted per turn rather than cached: a monitor can be unplugged between
+            // questions, and a tool description that claims three when there is one sends
+            // the model looking for screens that are not there.
+            //
+            // Falls back to one on failure. Claiming a single display when there are three
+            // costs a wrong answer the user can correct by asking again; claiming three when
+            // enumeration is broken costs every turn three captures that cannot happen.
+            vec![crate::llm::tools::capture_screen(
+                state.screen.displays().map(|d| d.len()).unwrap_or(1).max(1),
+            )]
         } else {
             Vec::new()
         },

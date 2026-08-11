@@ -758,7 +758,7 @@ mod tests {
             system: None,
             messages,
             max_tokens: 100,
-            tools: vec![crate::llm::tools::capture_screen()],
+            tools: vec![crate::llm::tools::capture_screen(1)],
         }
     }
 
