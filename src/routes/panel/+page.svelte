@@ -12,6 +12,7 @@
     onSessionState,
     type SessionState,
     onTrimmed,
+    dismissSession,
   } from "$lib/ipc";
   import { renderMarkdown } from "$lib/markdown";
   import {
@@ -182,6 +183,11 @@
     reset();
     captured = null;
     trimmed = null;
+
+    // The backend keeps the most recent screenshot for the next question. Clearing the
+    // panel's own state and leaving that behind would mean a dismissed thread still had an
+    // image in it — invisible, and exactly the promise this function exists to keep.
+    await dismissSession().catch(() => {});
 
     await getCurrentWindow().hide();
   };

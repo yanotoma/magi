@@ -122,6 +122,7 @@ pub fn run() {
                 #[cfg(not(target_os = "macos"))]
                 screen: std::sync::Arc::new(crate::capture::FakeCapture::headless()),
                 session: std::sync::Arc::new(crate::session::Session::new()),
+                last_capture: Mutex::new(None),
                 capture_log: std::sync::Arc::new(crate::capture::CaptureLog::new()),
                 in_flight: Mutex::new(None),
             });
@@ -172,6 +173,7 @@ pub fn run() {
             commands::open_permission_settings,
             commands::send_text_turn,
             commands::cancel_turn,
+            commands::dismiss_session,
         ])
         .on_window_event(|window, event| {
             // Closing a window must never quit a tray app. Hide instead, and let

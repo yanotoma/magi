@@ -85,6 +85,21 @@ pub struct AppState {
     /// in an editor and paste into bug reports.
     pub models_dir: PathBuf,
 
+    /// The most recent screenshot, kept for the next question.
+    ///
+    /// Without it Magi cannot see what it looked at a turn ago: the panel resends history as
+    /// role and content only, so a capture lives just inside the turn that took it, and a
+    /// follow-up like "and what does that mean?" arrives with nothing attached.
+    ///
+    /// **One, not all.** Keeping every capture is the quadratic growth the design doc warns
+    /// about — an image paid for again on every later turn. Keeping the newest is a fixed
+    /// ceiling that covers the case people actually hit, which is asking a second question
+    /// about the thing they just showed.
+    ///
+    /// Held here rather than in the panel because the panel never receives the image. Sending
+    /// megabytes out to the webview so it could send them back is the obvious wrong shape.
+    pub last_capture: Mutex<Option<RememberedCapture>>,
+
     /// What Magi is doing. The one authority, and the only writer of `magi://state`.
     ///
     /// `Arc` because events arrive from the hotkey handler, from a `spawn_blocking` worker
@@ -127,6 +142,14 @@ pub struct AppState {
     /// receiver goes away, and while both this field and the provider held a
     /// sender, dropping one would leave the channel open.
     pub in_flight: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
+}
+
+/// A screenshot worth showing the model again next turn.
+#[derive(Debug, Clone)]
+pub struct RememberedCapture {
+    /// What it was of, for the sentence that introduces it.
+    pub describes: String,
+    pub png: Vec<u8>,
 }
 
 /// A command failure, as a message the panel can render.
@@ -904,6 +927,28 @@ pub async fn send_text_turn(
         Message::user_seeing(text, attached)
     });
 
+    // The previous turn's screenshot, introduced rather than smuggled in. A bare image
+    // attached to a new question reads as the user having just shown it; a sentence saying
+    // when it was taken is what lets the model treat it as context and notice if it looks
+    // stale.
+    if let Some(remembered) = state.last_capture.lock().ok().and_then(|last| last.clone()) {
+        let position = messages.len() - 1;
+        messages.insert(
+            position,
+            Message::user_seeing(
+                format!(
+                    "For reference, this is what {} looked like when you last checked. \
+                     Capture again if the answer depends on it having changed.",
+                    remembered.describes
+                ),
+                vec![crate::llm::provider::Image {
+                    media_type: "image/png",
+                    bytes: remembered.png,
+                }],
+            ),
+        );
+    }
+
     // Trimmed after the new question is appended, so the question is part of what is being
     // budgeted rather than an addition to whatever survived. `fit` never drops the newest
     // exchange, so the thing just pushed is safe.
@@ -1178,10 +1223,47 @@ async fn heuristic_capture(app: &tauri::AppHandle, text: &str) -> Vec<crate::llm
         tracing::warn!(%error, "could not announce the capture");
     }
 
+    remember(app, Some(&capture));
+
     vec![crate::llm::provider::Image {
         media_type: "image/png",
         bytes: capture.png,
     }]
+}
+
+/// Keeps `capture` for the next turn, replacing whatever was there.
+///
+/// The newest wins. An older screenshot is not merely less useful — it is actively misleading,
+/// because the screen has moved on and the model has no way to tell.
+fn remember(app: &tauri::AppHandle, capture: Option<&crate::capture::Capture>) {
+    use tauri::Manager;
+
+    let Some(capture) = capture else {
+        return;
+    };
+
+    if let Ok(mut last) = app.state::<AppState>().last_capture.lock() {
+        *last = Some(RememberedCapture {
+            describes: capture.subject.describe(),
+            png: capture.png.clone(),
+        });
+    }
+}
+
+/// Forgets the thread's backend state.
+///
+/// Called when the panel is dismissed, alongside the frontend's own `reset`. This is the
+/// command that was dropped from M6 as duplicating what the panel already did — and it earns
+/// its place now, because there is finally backend state that outlives a turn. A remembered
+/// screenshot surviving a dismissal would be the same broken promise the thread itself was:
+/// the user believes it is gone, and it is not.
+#[tauri::command]
+pub fn dismiss_session(app: tauri::AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
+    if let Ok(mut last) = state.last_capture.lock() {
+        *last = None;
+    }
+    crate::session::report(&app, crate::session::Event::Stopped);
+    Ok(())
 }
 
 /// Runs one tool call and produces the message that answers it.
@@ -1309,6 +1391,8 @@ async fn answer_call(
         text.push_str("\n\nOpen windows, frontmost first:\n");
         text.push_str(&listed.join("\n"));
     }
+
+    remember(app, captures.last());
 
     Message::ToolResult {
         call_id: call.id.clone(),

@@ -378,6 +378,16 @@ export type SessionState =
  * of a conversation changes what the model can answer, and a user who is not told reads the
  * difference as the model having got worse.
  */
+/**
+ * Forgets the thread's backend state.
+ *
+ * Pairs with `reset()` on the frontend: that clears what the panel shows, this clears what the
+ * backend kept — currently the most recent screenshot, held so a follow-up can see what Magi
+ * last looked at. A remembered capture surviving a dismissal would be the same broken promise
+ * the thread itself was, since the user believes it is gone.
+ */
+export const dismissSession = async (): Promise<void> => invoke("dismiss_session");
+
 export const onTrimmed = async (handler: (dropped: number) => void) =>
   listen<number>("magi://trimmed", (event) => handler(event.payload));
 
