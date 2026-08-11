@@ -371,6 +371,16 @@ export type SessionState =
   | "capturing"
   | "streaming";
 
+/**
+ * Fires when older turns were dropped to stay inside the context budget.
+ *
+ * Carries how many messages went. Worth surfacing rather than logging: losing the early part
+ * of a conversation changes what the model can answer, and a user who is not told reads the
+ * difference as the model having got worse.
+ */
+export const onTrimmed = async (handler: (dropped: number) => void) =>
+  listen<number>("magi://trimmed", (event) => handler(event.payload));
+
 export const onSessionState = async (handler: (state: SessionState) => void) =>
   listen<SessionState>("magi://state", (event) => handler(event.payload));
 

@@ -909,11 +909,20 @@ pub async fn send_text_turn(
     // exchange, so the thing just pushed is safe.
     let before = messages.len();
     let messages = crate::llm::history::fit(messages, HISTORY_BUDGET);
-    if messages.len() < before {
+    let dropped = before - messages.len();
+    if dropped > 0 {
         tracing::info!(
-            dropped = before - messages.len(),
+            dropped,
             "trimmed the conversation to fit the history budget"
         );
+
+        // Said out loud, not only logged. Losing the early part of a conversation changes
+        // what the model can answer, and a user who is not told will read the difference as
+        // the model having become worse. A log line is not telling them: the app does not
+        // emit one unless `RUST_LOG` is set, which nobody running a menu bar app has done.
+        if let Err(error) = app.emit("magi://trimmed", dropped) {
+            tracing::warn!(%error, "could not report the trim");
+        }
     }
 
     let request = TurnRequest {

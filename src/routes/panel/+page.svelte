@@ -11,6 +11,7 @@
     onCaptured,
     onSessionState,
     type SessionState,
+    onTrimmed,
   } from "$lib/ipc";
   import { renderMarkdown } from "$lib/markdown";
   import {
@@ -51,6 +52,19 @@
    *  still owns what it *shows*, and this owns what is *true*. Where the two disagree the
    *  backend wins, because it is the side that knows. */
   let sessionState = $state<SessionState>("idle");
+
+  /** How many older messages the last request dropped, or null.
+   *
+   *  Shown once and then left alone until the next trim: it describes something that already
+   *  happened, so repeating it on every later turn would read as it happening again. */
+  let trimmed = $state<number | null>(null);
+
+  $effect(() => {
+    const stop = onTrimmed((dropped) => (trimmed = dropped));
+    return () => {
+      stop.then((unlisten) => unlisten());
+    };
+  });
 
   $effect(() => {
     const stop = onSessionState((state) => (sessionState = state));
@@ -167,6 +181,7 @@
     // gone, and it is not.
     reset();
     captured = null;
+    trimmed = null;
 
     await getCurrentWindow().hide();
   };
@@ -268,6 +283,18 @@
           {/if}
         </div>
       </div>
+    {/if}
+
+    {#if trimmed !== null}
+      <!--
+        Above the composer rather than in the thread: it is a statement about the request,
+        not a turn in the conversation. Quiet, because it is information rather than a
+        problem — the answer is still coming.
+      -->
+      <p class="notice">
+        {trimmed} older message{trimmed === 1 ? "" : "s"} dropped to stay within the context
+        budget. Earlier turns are no longer part of what the model can see.
+      </p>
     {/if}
 
     {#if conversation.notice}
