@@ -85,6 +85,41 @@ pub struct AppState {
     /// in an editor and paste into bug reports.
     pub models_dir: PathBuf,
 
+    /// The most recent screenshot, kept for the next question.
+    ///
+    /// Without it Magi cannot see what it looked at a turn ago: the panel resends history as
+    /// role and content only, so a capture lives just inside the turn that took it, and a
+    /// follow-up like "and what does that mean?" arrives with nothing attached.
+    ///
+    /// **One, not all.** Keeping every capture is the quadratic growth the design doc warns
+    /// about — an image paid for again on every later turn. Keeping the newest is a fixed
+    /// ceiling that covers the case people actually hit, which is asking a second question
+    /// about the thing they just showed.
+    ///
+    /// Held here rather than in the panel because the panel never receives the image. Sending
+    /// megabytes out to the webview so it could send them back is the obvious wrong shape.
+    pub last_capture: Mutex<Option<RememberedCapture>>,
+
+    /// When the panel was last hidden, or `None` while it is open.
+    ///
+    /// Exists so the remembered screenshot can expire. A thread that survives being closed —
+    /// which is what the maintainer asked for — means a picture of someone's screen could
+    /// otherwise sit in memory for a working day.
+    ///
+    /// A timestamp *and* a timer, because either alone is wrong. A timer that fires five
+    /// minutes after closing would also fire five minutes after a close that was followed by
+    /// reopening and closing again thirty seconds ago. Checking the timestamp when it fires is
+    /// what keeps the expiry honest; the timer is what actually frees the memory rather than
+    /// waiting for someone to ask.
+    pub panel_hidden_at: Mutex<Option<std::time::Instant>>,
+
+    /// What Magi is doing. The one authority, and the only writer of `magi://state`.
+    ///
+    /// `Arc` because events arrive from the hotkey handler, from a `spawn_blocking` worker
+    /// and from the turn task, and none of them should wait on the others for longer than a
+    /// comparison and an assignment.
+    pub session: Arc<crate::session::Session>,
+
     /// The screen. Behind the trait, so the tests that matter — which display was chosen,
     /// how big the result is — need no display attached, and so a Linux build has something
     /// to hold at all.
@@ -122,6 +157,14 @@ pub struct AppState {
     pub in_flight: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
 }
 
+/// A screenshot worth showing the model again next turn.
+#[derive(Debug, Clone)]
+pub struct RememberedCapture {
+    /// What it was of, for the sentence that introduces it.
+    pub describes: String,
+    pub png: Vec<u8>,
+}
+
 /// A command failure, as a message the panel can render.
 ///
 /// Commands return `Result<T, String>` rather than a typed error because the
@@ -146,6 +189,13 @@ pub struct ProviderView {
     pub base_url: String,
     pub models: Vec<String>,
     pub requires_key: bool,
+
+    /// The context window in tokens, or `None` when it has not been set.
+    ///
+    /// Sent back so the form shows what is stored rather than an empty box that would
+    /// silently clear the value on the next save.
+    pub context_tokens: Option<u32>,
+
     pub has_key: bool,
     /// Enough to tell two keys apart, never enough to use one. `None` when no
     /// key is stored.
@@ -479,6 +529,7 @@ pub async fn get_config(state: State<'_, AppState>) -> CommandResult<ConfigView>
                 base_url: p.base_url.clone(),
                 models: p.models.clone(),
                 requires_key: p.requires_key,
+                context_tokens: p.context_tokens,
                 has_key: hint.is_some(),
                 key_hint: hint,
                 capabilities: probed.get(&p.id).cloned().unwrap_or_default(),
@@ -738,10 +789,6 @@ pub fn apply_theme(app: &tauri::AppHandle, theme: Theme) {
     }
 }
 
-/// How much room a reply gets. Generous: the panel scrolls, and a truncated
-/// answer is worse than a long one.
-const MAX_TOKENS: u32 = 4096;
-
 /// Replaces the standing context sent with every turn.
 #[tauri::command]
 pub async fn set_prompt_context(
@@ -884,24 +931,95 @@ pub async fn send_text_turn(
         Message::user_seeing(text, attached)
     });
 
+    // The previous turn's screenshot, introduced rather than smuggled in. A bare image
+    // attached to a new question reads as the user having just shown it; a sentence saying
+    // when it was taken is what lets the model treat it as context and notice if it looks
+    // stale.
+    if let Some(remembered) = state.last_capture.lock().ok().and_then(|last| last.clone()) {
+        let position = messages.len() - 1;
+        messages.insert(
+            position,
+            Message::user_seeing(
+                format!(
+                    "For reference, this is what {} looked like when you last checked. \
+                     Capture again if the answer depends on it having changed.",
+                    remembered.describes
+                ),
+                vec![crate::llm::provider::Image {
+                    media_type: "image/png",
+                    bytes: remembered.png,
+                }],
+            ),
+        );
+    }
+
+    // Built here rather than inside the request below, because the tool definitions are part
+    // of what the context window has to hold — 1.7 KB of JSON schema is 400-odd tokens, and
+    // history cannot be budgeted without subtracting them first.
+    //
+    // Offered to exactly one tier, matching what the system prompt says. A model that
+    // malforms tool syntax must not be handed a definition to malform, and one that cannot
+    // see has nothing to do with a screenshot.
+    let tools = if tier.offers_capture_tool() {
+        // Counted per turn rather than cached: a monitor can be unplugged between
+        // questions, and a tool description that claims three when there is one sends
+        // the model looking for screens that are not there.
+        //
+        // Falls back to one on failure. Claiming a single display when there are three
+        // costs a wrong answer the user can correct by asking again; claiming three when
+        // enumeration is broken costs every turn three captures that cannot happen.
+        vec![crate::llm::tools::capture_screen(
+            state.screen.displays().map(|d| d.len()).unwrap_or(1).max(1),
+        )]
+    } else {
+        Vec::new()
+    };
+
+    // How the window divides between the conversation and the reply. With no window
+    // configured this is the constant that was here before and the reply cap Magi always
+    // asked for — the feature costs a user who configures nothing exactly nothing.
+    let plan = crate::llm::budget::plan(
+        provider_config.context_tokens,
+        crate::llm::budget::request_overhead(Some(&system), &tools),
+    );
+
+    // Trimmed after the new question is appended, so the question is part of what is being
+    // budgeted rather than an addition to whatever survived. `fit` never drops the newest
+    // exchange, so the thing just pushed is safe.
+    let before = messages.len();
+    let messages = crate::llm::history::fit(messages, plan.history_budget);
+    let dropped = before - messages.len();
+    if dropped > 0 {
+        tracing::info!(
+            dropped,
+            "trimmed the conversation to fit the history budget"
+        );
+
+        // Said out loud, not only logged. Losing the early part of a conversation changes
+        // what the model can answer, and a user who is not told will read the difference as
+        // the model having become worse. A log line is not telling them: the app does not
+        // emit one unless `RUST_LOG` is set, which nobody running a menu bar app has done.
+        if let Err(error) = app.emit("magi://trimmed", dropped) {
+            tracing::warn!(%error, "could not report the trim");
+        }
+    }
+
     let request = TurnRequest {
         model,
         system: Some(system),
         messages,
-        max_tokens: MAX_TOKENS,
-        // Offered to exactly one tier, matching what the system prompt says. A model
-        // that malforms tool syntax must not be handed a definition to malform, and one
-        // that cannot see has nothing to do with a screenshot.
-        tools: if tier.offers_capture_tool() {
-            vec![crate::llm::tools::capture_screen()]
-        } else {
-            Vec::new()
-        },
+        // Not a constant any more. On a large window this is the 4096 it always was; on a
+        // small one it is a quarter of the window, because reserving 4096 of an 8k model for
+        // a reply that is usually a few hundred tokens spends the conversation on space the
+        // model will not use.
+        max_tokens: plan.max_tokens,
+        tools,
     };
 
     let provider = registry::build(state.http.clone(), &provider_config, api_key);
 
     let task = tauri::async_runtime::spawn(async move {
+        crate::session::report(&app, crate::session::Event::Asked);
         let mut request = request;
         // One budget for the whole turn, not per request: the point is to bound how many
         // times a model can go round, and a fresh budget each iteration would bound
@@ -923,6 +1041,11 @@ pub async fn send_text_turn(
                 while let Some(event) = rx.recv().await {
                     let emitted = match event {
                         StreamEvent::Token(token) => {
+                            // Reported on every token and acted on once: `apply` returns
+                            // `None` when nothing moved, so only the first one becomes a
+                            // state event. Cheaper than tracking "have I reported yet"
+                            // here, and impossible to get wrong.
+                            crate::session::report(&app, crate::session::Event::Answering);
                             // Kept as well as forwarded. The assistant's turn has to be
                             // replayed whole when a tool result follows it, and the panel
                             // is not a place to read it back from.
@@ -964,6 +1087,7 @@ pub async fn send_text_turn(
             if let Err(error) = result {
                 let message = error.to_string();
                 tracing::warn!(%message, "turn failed");
+                crate::session::report(&app, crate::session::Event::Stopped);
                 if let Err(error) = app.emit("magi://error", message) {
                     tracing::warn!(%error, "could not emit the turn error");
                 }
@@ -978,6 +1102,7 @@ pub async fn send_text_turn(
                 if matches!(stop, StopReason::ToolUse) {
                     tracing::warn!("the model stopped for a tool call and named none");
                 }
+                crate::session::report(&app, crate::session::Event::Answered);
                 if let Err(error) = app.emit("magi://turn-done", describe(&stop)) {
                     tracing::warn!(%error, "could not emit the turn completion");
                 }
@@ -998,6 +1123,29 @@ pub async fn send_text_turn(
                 request
                     .messages
                     .push(answer_call(&app, call, &mut budget).await);
+            }
+
+            // Re-fitted before going round again. The budget was computed for the request
+            // that went out, and this is no longer that request: a capture result carries a
+            // full image, so up to three of them can add more than the conversation they
+            // were appended to. Leaving it unchecked meant the one path that grows a request
+            // mid-turn was the one path that never measured it.
+            //
+            // Safe here and nowhere earlier. `fit` keeps the newest exchange whole, so the
+            // calls just made and the results answering them stay together — which is the
+            // rule both APIs enforce and the reason `fit` drops exchanges rather than
+            // messages.
+            let before = request.messages.len();
+            request.messages = crate::llm::history::fit(
+                std::mem::take(&mut request.messages),
+                plan.history_budget,
+            );
+            let dropped = before - request.messages.len();
+            if dropped > 0 {
+                tracing::info!(dropped, "trimmed the conversation to fit a capture result");
+                if let Err(error) = app.emit("magi://trimmed", dropped) {
+                    tracing::warn!(%error, "could not report the trim");
+                }
             }
         }
     });
@@ -1023,7 +1171,8 @@ pub struct TurnMessage {
 
 /// Cancels the turn in flight, if there is one.
 #[tauri::command]
-pub fn cancel_turn(state: State<'_, AppState>) -> CommandResult<()> {
+pub fn cancel_turn(app: tauri::AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
+    crate::session::report(&app, crate::session::Event::Stopped);
     let mut in_flight = state.in_flight.lock().map_err(to_message)?;
     if let Some(task) = in_flight.take() {
         // Aborting drops the receiver, so the provider stops on its next send
@@ -1065,6 +1214,8 @@ async fn heuristic_capture(app: &tauri::AppHandle, text: &str) -> Vec<crate::llm
         return Vec::new();
     };
 
+    crate::session::report(app, crate::session::Event::Looking);
+
     // The matched phrase chooses the target, which costs nothing because the phrase is
     // already known: someone who said "this screen" meant the display, and someone who
     // said "this error" meant the window they are looking at — which is also the sharper
@@ -1080,6 +1231,8 @@ async fn heuristic_capture(app: &tauri::AppHandle, text: &str) -> Vec<crate::llm
         }
     })
     .await;
+
+    crate::session::report(app, crate::session::Event::Looked);
 
     let capture = match captured {
         Ok(Ok(capture)) => capture,
@@ -1115,10 +1268,128 @@ async fn heuristic_capture(app: &tauri::AppHandle, text: &str) -> Vec<crate::llm
         tracing::warn!(%error, "could not announce the capture");
     }
 
+    remember(app, Some(&capture));
+
     vec![crate::llm::provider::Image {
         media_type: "image/png",
         bytes: capture.png,
     }]
+}
+
+/// Keeps `capture` for the next turn, replacing whatever was there.
+///
+/// The newest wins. An older screenshot is not merely less useful — it is actively misleading,
+/// because the screen has moved on and the model has no way to tell.
+fn remember(app: &tauri::AppHandle, capture: Option<&crate::capture::Capture>) {
+    use tauri::Manager;
+
+    let Some(capture) = capture else {
+        return;
+    };
+
+    if let Ok(mut last) = app.state::<AppState>().last_capture.lock() {
+        *last = Some(RememberedCapture {
+            describes: capture.subject.describe(),
+            png: capture.png.clone(),
+        });
+    }
+}
+
+/// How long a remembered screenshot outlives the panel being closed.
+///
+/// Five minutes, which the maintainer chose and which reads as the right shape: long enough
+/// that closing the panel to look at something and coming back keeps the context, short enough
+/// that a picture of someone's screen is not still in memory after lunch.
+///
+/// The conversation itself does not expire — only the image. The text is small and is the part
+/// worth continuing; the image is megabytes and is the part that is a photograph of what
+/// somebody was doing.
+pub const CAPTURE_LIFETIME: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+/// Starts the clock on the remembered screenshot.
+///
+/// Called when the panel is hidden. Spawns a task rather than only recording the time, because
+/// the point is to free the memory: a lazy check on next use would leave several megabytes
+/// sitting there for as long as nobody reopened the panel, which is exactly the case being
+/// guarded against.
+pub fn expire_capture_later(app: &tauri::AppHandle) {
+    use tauri::Manager;
+
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(mut hidden) = state.panel_hidden_at.lock() {
+            *hidden = Some(std::time::Instant::now());
+        }
+    }
+
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(CAPTURE_LIFETIME).await;
+
+        let Some(state) = app.try_state::<AppState>() else {
+            return;
+        };
+
+        // Re-checked rather than trusted. This task cannot be cancelled by reopening the
+        // panel, so it has to establish for itself that the panel is still closed and has
+        // been for the whole lifetime — otherwise a close, a reopen and a second close would
+        // have the first task expire the second one's screenshot early.
+        // Copied out of the guard, not borrowed through it: the lock guard would otherwise
+        // live to the end of the expression and outlive the `State` it came from.
+        let hidden_at = match state.panel_hidden_at.lock() {
+            Ok(hidden) => *hidden,
+            Err(_) => return,
+        };
+
+        let expired = hidden_at.is_some_and(|hidden| hidden.elapsed() >= CAPTURE_LIFETIME);
+
+        if !expired {
+            return;
+        }
+
+        // The lock guard is taken and dropped inside the `match` rather than in a trailing
+        // `if let`, whose temporaries would outlive the `State` borrow they came from.
+        let released = match state.last_capture.lock() {
+            Ok(mut last) => last.take().is_some(),
+            Err(_) => false,
+        };
+
+        if released {
+            tracing::debug!("released the remembered screenshot");
+        }
+    });
+}
+
+/// Stops the clock, because the panel is open again.
+pub fn cancel_capture_expiry(app: &tauri::AppHandle) {
+    use tauri::Manager;
+
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(mut hidden) = state.panel_hidden_at.lock() {
+            *hidden = None;
+        }
+    }
+}
+
+/// Forgets the thread's backend state.
+///
+/// Called by **Clear**, and by nothing else. Closing the panel does not reach here.
+///
+/// That is a reversal of the design doc, which says dismissing the panel discards the thread
+/// as a privacy-preserving default. The maintainer's call, and a defensible one: Escape and
+/// clicking away are easy to do by accident, and losing a conversation to a mistaken keypress
+/// is a cost paid every time it happens, against a privacy benefit that only matters if
+/// somebody else is at the machine. Clear is unambiguous — nobody presses it by accident.
+///
+/// What the reversal costs is that a thread now outlives the panel being closed, so a
+/// screenshot Magi took stays in memory until Clear or quit. `docs/TASKS.md` carries the note
+/// to correct the design doc.
+#[tauri::command]
+pub fn clear_session(app: tauri::AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
+    if let Ok(mut last) = state.last_capture.lock() {
+        *last = None;
+    }
+    crate::session::report(&app, crate::session::Event::Stopped);
+    Ok(())
 }
 
 /// Runs one tool call and produces the message that answers it.
@@ -1160,6 +1431,11 @@ async fn answer_call(
     let reason = crate::llm::tools::Reason::from_tool_arguments(&call.arguments);
     let target = crate::llm::tools::Target::from_tool_arguments(&call.arguments);
 
+    // Bracketed, so the indicator says "looking" for exactly as long as it is true. The
+    // `Looked` below runs on every path out of here, including the failures, because a
+    // capture that did not work still stopped happening.
+    crate::session::report(app, crate::session::Event::Looking);
+
     // `spawn_blocking`, because a capture is a synchronous round trip through the window
     // server. Holding a runtime worker for it starves everything else that runtime polls.
     let screen = Arc::clone(&app.state::<AppState>().screen);
@@ -1184,6 +1460,8 @@ async fn answer_call(
     .await
     .map_err(|error| error.to_string())
     .and_then(|result| result.map_err(|error| error.to_string()));
+
+    crate::session::report(app, crate::session::Event::Looked);
 
     let (captures, windows) = match gathered {
         Ok(gathered) => gathered,
@@ -1239,6 +1517,8 @@ async fn answer_call(
         text.push_str("\n\nOpen windows, frontmost first:\n");
         text.push_str(&listed.join("\n"));
     }
+
+    remember(app, captures.last());
 
     Message::ToolResult {
         call_id: call.id.clone(),
@@ -1559,6 +1839,21 @@ fn unix_millis() -> u64 {
 pub fn clear_capture_log(state: tauri::State<'_, AppState>) -> CommandResult<CaptureView> {
     state.capture_log.clear();
     get_capture(state)
+}
+
+/// The one-click questions the active model can actually answer.
+///
+/// Filtered here rather than in the panel, because the panel does not know the model's tier and
+/// should not have to. Offering "summarise my screen" to a model that cannot see is the same
+/// mistake as telling one it can look: a promise the code cannot keep, and the user learns to
+/// distrust the buttons rather than the model.
+#[tauri::command]
+pub fn prompt_templates(
+    app: tauri::AppHandle,
+) -> CommandResult<Vec<crate::llm::templates::Template>> {
+    Ok(crate::llm::templates::for_tier(
+        crate::session::active_tier_of(&app),
+    ))
 }
 
 /// Opens the System Settings pane for a permission.

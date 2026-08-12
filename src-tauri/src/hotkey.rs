@@ -174,7 +174,7 @@ pub fn plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
 
             if matches_shortcut(&fired, &toggle) {
                 if pressed {
-                    if let Err(error) = crate::windows::toggle_panel(app) {
+                    if let Err(error) = crate::session::toggle_panel(app) {
                         tracing::error!(%error, "failed to toggle panel from hotkey");
                     }
                 }

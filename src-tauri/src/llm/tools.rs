@@ -34,7 +34,24 @@ pub const MAX_CAPTURES_PER_TURN: u8 = 3;
 /// the consequence of not calling — no sight at all — because a model that assumes it can
 /// already see the screen will answer confidently about a screen it never looked at, and
 /// that is the failure this whole design exists to avoid.
-pub fn capture_screen() -> ToolSpec {
+pub fn capture_screen(displays: usize) -> ToolSpec {
+    // How many monitors there are, in words the model can act on. It cannot see the desk,
+    // and without this it answers "do I have that page open" from one screen out of three —
+    // observed, and it said no with confidence about a desktop it had seen a third of.
+    //
+    // Phrased as a fact plus a consequence rather than an order. A model told "always use
+    // all_screens" would pay for three images on questions about the window in front of it.
+    let layout = if displays > 1 {
+        format!(
+            " The user has {displays} displays connected, so one screen is not the whole \
+             desktop: any question about whether something is open, or about where something \
+             is, needs `all_screens` — a single screen can only tell you about a third of \
+             what is in front of them."
+        )
+    } else {
+        String::new()
+    };
+
     ToolSpec {
         name: CAPTURE_SCREEN.to_string(),
         description: "Take a screenshot of the user's screen and look at it. \
@@ -46,7 +63,8 @@ pub fn capture_screen() -> ToolSpec {
                       Choose `focused_window` unless you need the whole display — a window \
                       is photographed at far higher resolution for the same cost, and small \
                       text is often unreadable in a full-screen shot."
-            .to_string(),
+            .to_string()
+            + &layout,
         parameters: serde_json::json!({
             "type": "object",
             "properties": {
@@ -231,7 +249,7 @@ mod tests {
     fn the_tool_is_named_exactly_what_the_matcher_looks_for() {
         // Offered in one place and matched in another. A typo between them is a tool that
         // is never recognised, which looks like a model ignoring it.
-        assert_eq!(capture_screen().name, CAPTURE_SCREEN);
+        assert_eq!(capture_screen(1).name, CAPTURE_SCREEN);
         assert_eq!(CAPTURE_SCREEN, "capture_screen");
     }
 
@@ -239,7 +257,7 @@ mod tests {
     fn the_description_tells_the_model_it_is_otherwise_blind() {
         // The one thing the description must convey. A model that assumes it can already
         // see will answer confidently about a screen it never looked at.
-        let description = capture_screen().description;
+        let description = capture_screen(1).description;
         assert!(
             description.contains("cannot see"),
             "the description does not say the model is blind without it: {description}"
@@ -268,7 +286,7 @@ mod tests {
     fn each_documented_target_is_understood() {
         // Every value in the schema's enum must map to something, or the model would be
         // offered a choice that silently becomes a different one.
-        let enumerated = capture_screen().parameters["properties"]["target"]["enum"].clone();
+        let enumerated = capture_screen(1).parameters["properties"]["target"]["enum"].clone();
         let values = enumerated.as_array().expect("an enum array").clone();
         assert_eq!(values.len(), 3);
 
@@ -286,11 +304,25 @@ mod tests {
     }
 
     #[test]
+    fn a_multi_monitor_desk_is_named_in_the_description() {
+        // The model cannot see the desk. Told nothing, it answered "no, you do not have that
+        // page open" from one screen out of three — confidently, and wrongly. A fact it can
+        // reason about is the fix; an order to always capture everything is not, because it
+        // would pay for three images to read the window in front of it.
+        let one = capture_screen(1).description;
+        assert!(!one.contains("displays connected"), "{one}");
+
+        let three = capture_screen(3).description;
+        assert!(three.contains("3 displays connected"), "{three}");
+        assert!(three.contains("all_screens"), "{three}");
+    }
+
+    #[test]
     fn the_description_tells_the_model_a_window_is_sharper() {
         // The measurement behind it: an ultrawide desktop has to be shrunk to 0.46x to fit
         // the token budget, while a 1440x900 window fits at 1.09x. Same cost, and the
         // model has no way to know that unless told.
-        let description = capture_screen().description;
+        let description = capture_screen(1).description;
         assert!(description.contains("higher resolution"), "{description}");
     }
 
@@ -299,7 +331,7 @@ mod tests {
         // Closed on purpose: an open schema lets a model invent an argument that then has
         // to be ignored somewhere, and "ignored somewhere" is where behaviour goes to
         // become unexplainable.
-        let parameters = capture_screen().parameters;
+        let parameters = capture_screen(1).parameters;
         assert_eq!(parameters["type"], "object");
         assert_eq!(parameters["additionalProperties"], false);
         assert_eq!(

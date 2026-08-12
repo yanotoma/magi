@@ -38,6 +38,13 @@ export type ProviderView = {
   base_url: string;
   models: string[];
   requires_key: boolean;
+  /**
+   * The context window in tokens, or null when it has not been set.
+   *
+   * Null is the common case and means Magi does not know: the history budget
+   * falls back to a conservative constant rather than a guess.
+   */
+  context_tokens: number | null;
   /** Whether a key is stored. The key itself never reaches the frontend. */
   has_key: boolean;
   /**
@@ -90,6 +97,12 @@ export type ProviderInput = {
   base_url: string;
   models: string[];
   requires_key: boolean;
+  /**
+   * Omitted entirely when the user has not set one — not sent as null or zero.
+   * The backend rejects an implausibly small window rather than believing it,
+   * and treats an absent key as "unknown", which is a different thing.
+   */
+  context_tokens?: number;
 };
 
 export const getConfig = async (): Promise<ConfigView> => invoke<ConfigView>("get_config");
@@ -356,6 +369,60 @@ export const requestScreenRecording = async (): Promise<CaptureView> =>
  * Carries what was captured, so the panel can say *what* was looked at rather than only
  * that something was. The details — size, cost, why — go to Settings › Screen.
  */
+/**
+ * What Magi is doing, as one value.
+ *
+ * Replaces inferring it from a dozen separate events. The backend is the authority and emits
+ * only when the state changes, so a handler here can assign it straight to a rune without
+ * comparing anything.
+ */
+export type SessionState =
+  | "idle"
+  | "listening"
+  | "transcribing"
+  | "thinking"
+  | "capturing"
+  | "streaming";
+
+/**
+ * Fires when older turns were dropped to stay inside the context budget.
+ *
+ * Carries how many messages went. Worth surfacing rather than logging: losing the early part
+ * of a conversation changes what the model can answer, and a user who is not told reads the
+ * difference as the model having got worse.
+ */
+/**
+ * Forgets the thread's backend state.
+ *
+ * Pairs with `reset()` on the frontend: that clears what the panel shows, this clears what the
+ * backend kept — currently the most recent screenshot, held so a follow-up can see what Magi
+ * last looked at.
+ *
+ * Called by **Clear** and by nothing else. Closing the panel deliberately keeps the thread,
+ * so the two must not be confused: an image left behind by a Clear would be invisible state
+ * the user believed they had discarded.
+ */
+export const clearSession = async (): Promise<void> => invoke("clear_session");
+
+export const onTrimmed = async (handler: (dropped: number) => void) =>
+  listen<number>("magi://trimmed", (event) => handler(event.payload));
+
+/** A one-click question, filtered by what the active model can actually do. */
+export type PromptTemplate = { label: string; prompt: string };
+
+/**
+ * The shortcut questions worth offering.
+ *
+ * Filtered by the backend rather than here, because the panel does not know the active model's
+ * tier — and offering "summarise my screen" to a model that cannot see teaches the user to
+ * distrust the buttons rather than the model.
+ */
+export const promptTemplates = async (): Promise<PromptTemplate[]> =>
+  invoke<PromptTemplate[]>("prompt_templates");
+
+export const onSessionState = async (handler: (state: SessionState) => void) =>
+  listen<SessionState>("magi://state", (event) => handler(event.payload));
+
 export const onCaptured = async (handler: (subject: string) => void) =>
   listen<string>("magi://captured", (event) => handler(event.payload));
 

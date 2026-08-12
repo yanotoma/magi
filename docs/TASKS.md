@@ -2,10 +2,10 @@
 
 Complete breakdown of what is done and what is pending, across every milestone.
 
-**Last updated:** 2026-08-10
-**Current phase:** M5 — screen capture & agentic vision, targeting `0.4.0-alpha.1`
-**Current version:** `0.2.0-alpha.2` (released — see [VERSIONING.md](VERSIONING.md))
-**Overall:** 113 / 160 tasks done (71%)
+**Last updated:** 2026-08-12
+**Current phase:** M6 — session machine & panel UX, targeting `0.5.0-beta.1`
+**Current version:** `0.4.0-alpha.1` (released — see [VERSIONING.md](VERSIONING.md))
+**Overall:** 131 / 163 tasks done (80%)
 
 Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 
@@ -21,9 +21,9 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 | **M3** | Pre-flight & capability tiers | `0.2.0-alpha.2` | 13 | 14 | ✅ Shipped |
 | **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 27 | 27 | ✅ Shipped |
 | **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 15 | 16 | ✅ Shipped |
-| **M6** | Session machine & panel UX | `0.5.0-beta.1` | 0 | 16 | ⬜ |
+| **M6** | Session machine & panel UX | `0.5.0-beta.1` | 18 | 19 | 🔨 In progress |
 | **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 14 | ⬜ |
-| — | **v1 total** | `1.0.0` | **113** | **146** | |
+| — | **v1 total** | `1.0.0` | **131** | **149** | |
 | **M8** | v2 — wake word & TTS | `1.1.0` | 0 | 9 | 🔮 Post-v1 |
 | **M9** | v3 — computer use | `1.2.0` | 0 | 5 | 🔮 Post-v1 |
 
@@ -222,24 +222,36 @@ Deliberately not the session state machine, which is M6's. This is the smallest 
 ## M6 — Session machine & panel UX
 
 **Rust**
-- [ ] `session.rs` — the state machine (Idle → Listening → Transcribing → Thinking → Capturing → Streaming → Idle)
-- [ ] Conversation thread held in memory; discarded on dismiss
-- [ ] History assembly with a token budget and truncation strategy
-- [ ] Tauri commands: `toggle_session`, `send_text_turn`, `dismiss_session`
-- [ ] Emit `magi://state`, `magi://token`, `magi://error`
-- [ ] Cancellation — dismissing mid-stream must actually abort the request
-- [ ] Unit tests for every state transition, including error paths
+- [x] `session.rs` — the state machine (Idle → Listening → Transcribing → Thinking → Capturing → Streaming → Idle)
+- [x] Conversation thread held in memory; discarded on dismiss. The discard was missing until M6 began: `reset` existed, was imported by the panel, and had no caller, so dismissing hid a thread that returned on reopening — against a design-doc promise made twice, and a privacy one at that
+- [x] History assembly with a token budget and truncation strategy. Drops whole *exchanges* oldest-first, never a message: both APIs reject a tool call with no matching result, so splitting one would break the request rather than shorten the conversation. It stops rather than skips, since a thread missing a turn from its middle reads as the user having changed the subject and back. The newest exchange always survives — an over-budget request at least produces the provider's own error, while sending nothing answers a question nobody asked. Text is over-estimated on purpose; images are exact, read from the PNG header Magi itself wrote
+- [x] Make the history budget per-provider. `context_tokens` on a provider in `config.toml`, settable in Settings, and absent by default — Magi still does not guess, and a user who sets nothing gets the constant that was there before, which is asserted rather than described. What the task under-specified is that **a context window is not a budget**: the window holds the system prompt, the tool schemas, the history *and* the reply, so `llm::budget` returns both numbers from one subtraction. Two things fell out of knowing the window that were invisible without it. `max_tokens` was a flat 4096, which on an 8k model reserves half the window for a reply of a few hundred tokens and charges the conversation for it — a reply now takes at most a quarter of a small window. And the tool-calling loop appended capture results to a request whose budget had already been spent, so the one path that grows a request mid-turn was the one path that never measured it; it re-fits now, which is safe because `fit` keeps the newest exchange whole and a call therefore never parts from its result
+- [x] The panel toggle lives in `session` — renamed from this task's `toggle_session`, which described moving the state machine out of `Idle`. That came from the original interaction model where one hotkey opened the panel *and* the microphone; M2 split them. Opening a window is not an activity, so the session state is deliberately untouched and the panel being open is reported through `ShellState::PanelOpen`. What the task was really about is layering: `windows.rs` had grown calls into `commands` and `session`, because orchestration is easiest to put wherever the window handle already is, and `CLAUDE.md` makes `session.rs` the only module allowed to know about the others. It is a leaf again
+- [x] Emit `magi://state` from the session machine. `magi://token` and `magi://error` already exist — as do nine more events added since this was written, which is itself the argument for one state event rather than a growing vocabulary the panel has to infer from
+- [x] Cancellation — dismissing mid-stream actually aborts the request. `dismiss()` calls `stop()`, which is `cancelTurn()` plus `cancelStream()`; the backend aborts the task, which drops the receiver so the provider stops on its next send. Both halves are needed — an aborted task cannot emit a completion, so nothing would clear the streaming state and the panel would sit showing Stop
+- [x] Unit tests for every state transition, including error paths. Exhaustive over states × events, so a new variant cannot be added without them noticing, and the ways a busy state may reach `Idle` are listed explicitly — anything else arriving there is a bug, and anything added to the list is a decision
 
 **Svelte**
-- [ ] `conversation.svelte.ts` — shared rune state
-- [ ] Panel — thread view with per-turn roles
-- [ ] Panel — token-by-token streaming render
-- [ ] Panel — status indicator per state, including a distinct capture indicator
-- [ ] Panel — text input for typed follow-ups
-- [ ] Panel — Esc dismisses; click-outside behavior
-- [ ] Panel — inline error surfaces per failure class
-- [ ] Panel — markdown and code-block rendering with syntax highlighting
-- [ ] Prompt templates: pre-written user prompts bound to a trigger ("explain this error", "summarise this screen"). Distinct from the system prompt — these are user turns, not instructions, and they belong in the panel UI rather than in the prompt assembler
+- [x] `conversation.svelte.ts` — shared rune state. The `.svelte.ts` extension is required: runes in a plain `.ts` file are a compile error
+- [x] Panel — thread view with per-turn roles
+- [x] Panel — token-by-token streaming render
+- [x] Panel — status indicator per state, including a distinct capture indicator: a spinner while the request is away, a pulse while recording and transcribing, "Read <what>" while a screenshot is in play, and an inline alert on failure
+- [x] Tray — drive the icon from the session state. `ShellState` already has five variants
+      and `tray_icon_name` maps them, but neither has a caller outside tests: the icon is
+      assigned once in `init` and never changes, so the tray always shows idle. Nothing about
+      the tray is done however much of it exists. The state machine above is what it should
+      follow
+- [ ] Tray — art for `Degraded`, the one state with none. Deferred with a real reason
+      recorded in `tools/generate_tray_icon.py`: a cancel slash across three separated nodes
+      reads as nothing at 22pt, because the mark is discontinuous and every crossing forces a
+      choice between eating the ring and breaking the bar. It needs a different idea, looked
+      at in a real menu bar. `PanelOpen` is already settled — it shares `tray-idle`, since a
+      panel that is open is visible on screen and needs no second announcement
+- [x] Panel — text input for typed follow-ups
+- [x] Panel — click-outside dismisses, via window focus loss, and **only when nothing is in flight**. Dismissing unconditionally means glancing at another window while Magi is thinking throws the answer away — hostile in a way the user cannot undo, since the thread is gone and the tokens are spent. Escape still closes it at any time for anyone who means it. Guarded against its own hide, which loses focus and would otherwise re-enter the handler
+- [x] Panel — inline error surfaces per failure class, and notices separately from errors — a recording that hit the two-minute cap is worth saying and is not a failure
+- [x] Code-block syntax highlighting, via highlight.js with twelve grammars registered individually rather than its common bundle. It is the one thing in `markdown.ts` allowed to emit HTML, and the guarantee that replaces "cannot emit HTML" is narrower and verified: highlight.js escapes the code it is given, checked by passing `<script>alert(1)</script>` through it and confirming the angle brackets come back escaped with no live tag. Colours are mapped from its classes to a small palette in the panel's own stylesheet rather than importing one of its themes — a theme is forty hex values, which is the drift the tokens exist to prevent, and it is fixed while the panel is always a dark translucent surface
+- [x] Prompt templates: four pre-written user turns, shown as chips on an empty thread only — they are a way to start, not a toolbar, and under a conversation they would sit between the answer and the follow-up. **Filtered by the backend**, which knows the active model's tier: offering "summarise my screen" to a model that cannot see is the same broken promise as telling one it can look, except the user learns to distrust the buttons rather than the model. One template needs nothing, so the row is never empty — an empty row reads as broken rather than as unsupported. Clicking fills the box and focuses it rather than sending, which keeps one rule across the whole panel: nothing is asked without the user pressing Enter
 
 ---
 
@@ -413,6 +425,165 @@ useful feature. Worth considering ahead of M9 rather than as part of it.
 - [ ] Marks expire. An arrow left on screen after the answer is stale advice, and stale
       advice about where to click is worse than none — dismiss on the next question, on
       Escape, and after a timeout
+
+## Decided: closing the panel keeps the thread
+
+Reversal of a design-doc decision, at the maintainer's request: *"creo que el hilo no se
+debería descartar a menos que se haga click en clear"*.
+
+The doc says it twice — "dismissing it ends the thread", and "no conversation persistence in
+v1... privacy-preserving default". Implemented that way for one commit and then reversed,
+because the cost is paid more often than the benefit: Escape and clicking away are easy to
+trigger by accident, so discarding there loses a conversation to a mistaken keypress, while
+the privacy it buys only matters when somebody else is at the machine. **Clear** is
+unambiguous, and nobody presses it by accident.
+
+What this changes, and what still holds:
+
+- Closing the panel — by Escape, by clicking away, by the hotkey or from the tray menu — hides
+  it and keeps everything. All four now behave alike; two of them did not, and the difference
+  was invisible.
+- **Clear** discards both halves: the thread the panel shows and the screenshot the backend
+  kept for the next question. A Clear that left an image behind would be invisible state the
+  user believed they had thrown away.
+- Nothing is written to disk. The thread and the capture live in memory and go on quit, so
+  "no conversation persistence" is still true of storage — it is no longer true of dismissal.
+
+- [x] Correct section 4 and decision 2 of `docs/superpowers/specs/2026-08-06-magi-design.md`,
+      which described a dismissal that ends the thread
+- [x] Expire the remembered screenshot five minutes after the panel is closed. The
+      *conversation* does not expire — the text is small and is the part worth continuing,
+      while the image is megabytes and is a photograph of what somebody was doing. A timestamp
+      **and** a timer: a timer alone would fire five minutes after a close that was followed by
+      a reopen and a second close thirty seconds ago, and a timestamp alone would leave the
+      memory held until somebody happened to ask for it — which is the case being guarded
+      against
+
+## Requested: memory beyond one turn
+
+Asked for after noticing Magi cannot see what it looked at a turn ago: *"en vez de tenerlo
+todo en memoria, podríamos agregar un sistema de memoria? como un RAG o engram o sqlite?"*
+
+**First, what is actually broken.** The panel resends history as `{role, content}` only, so
+screenshots exist just inside the turn that took them. That was never decided — `Turn` in
+`conversation.svelte.ts` has no field for an image — and it has two consequences worth
+separating. The design doc's cost argument, that an image attached once is paid for on every
+later turn, **does not describe this implementation**: images are not resent, so the
+quadratic growth it warns about is not happening. And a follow-up question about a screen
+Magi just read cannot see it, which is the part that is genuinely wrong.
+
+**Why storage is the wrong first tool.** SQLite solves persistence, not relevance: the whole
+conversation is already in memory, and the limit is what fits in a request rather than what is
+kept. RAG solves relevance but needs embeddings — either another local model on the scale of
+whisper, or a remote API, which sends the text of someone's conversations off the machine and
+contradicts the reason the capture log is memory-only. Both also miss the thing being
+forgotten: it is an image, and there is no useful way to retrieve a screenshot by similarity.
+What would be stored is a text description, which is what the model's own answer already is.
+
+Cheapest first, and each step is useful without the next:
+
+- [x] Carry the most recent capture into the following turn. Held in `AppState` rather than in the panel, which never receives the image — sending megabytes out to the webview so it could send them back is the obvious wrong shape. Introduced by a sentence rather than attached bare, so the model treats it as context from earlier and can notice if it looks stale. The newest replaces the previous one: an older screenshot is not merely less useful, it is misleading, because the screen moved on and the model cannot tell
+- [ ] Summarise instead of truncating when the budget bites. Ask the configured model to
+      condense the oldest exchanges into a paragraph and send that in their place. Uses the
+      model already there; no new infrastructure. `llm::history::fit` is where the decision
+      to drop currently lives, and is where the choice to summarise belongs
+- [ ] Correct the design doc's cost argument in section 5, which describes resent images that
+      are not resent. Either the behaviour or the doc is wrong, and right now it is the doc
+- [ ] Only then, persistence across sessions — which the design doc already places in v2 and
+      calls an opt-in, because a stored conversation is a record of what someone was doing all
+      day and their questions about it. SQLite for storage when it happens; embeddings only if
+      retrieval proves necessary after summarisation, and local ones, or the privacy promise
+      goes with them
+
+## Deferred: asking the endpoint how big its window is
+
+Outside the summary table, same as the sections around it.
+
+`context_tokens` is per provider and typed by hand. That is honest and it is enough for the
+common case — one local model, or one hosted family — but it is wrong in two places. An
+endpoint serving many models has one number for all of them, so it has to be the smallest to
+be safe: OpenRouter's catalogue runs from 4k to over a million, and pinning it at 4k penalises
+every model on the list. And a number typed by hand is a number that goes stale silently.
+
+Some endpoints will say. **None of them is the OpenAI listing route Magi already calls** —
+`GET /v1/models` returns ids and nothing else, which is why `discovery.rs` reads only
+`data[].id`. Each source below is a separate request in a separate shape:
+
+- **OpenRouter** — `GET /api/v1/models` carries `context_length` per model. The cleanest of
+  the three, and the one where per-model matters most.
+- **LM Studio** — `GET /api/v0/models` carries `max_context_length` and
+  `loaded_context_length`. Its own namespace, not `/v1`.
+- **Ollama** — `POST /api/show`, and **the trap is here**. The response has both
+  `model_info["<arch>.context_length"]`, which is what the architecture was *trained* for, and
+  a `parameters` string carrying `num_ctx`, which is what the server actually *loaded*. They
+  routinely disagree by more than an order of magnitude, in the dangerous direction. Ollama's
+  own documentation shows it: the same example response reads
+  `"parameters": "temperature 0.7\nnum_ctx 2048"` beside `"gemma4.context_length": 131072`.
+  Reading the architecture figure and believing it would tell Magi 131072 about a model being
+  served at 2048 — a request 64× too large, built on a number Magi went and fetched, which is
+  worse than the conservative constant it replaced. `num_ctx` is the field that governs, and
+  it is prose inside a string rather than a typed value.
+- **Anthropic** — has no listing route and no per-model metadata. Its windows are documented
+  and not discoverable, and hardcoding them would put model facts in Magi that go stale
+  between releases: the 1M-context variants already make one number per vendor wrong.
+
+So this is not "parse one more field". It is three vendor-specific requests, one of which
+reports two contradictory numbers and needs the less obvious one.
+
+- [ ] Move `context_tokens` from per-provider to per-model, cached in `capabilities.json`
+      rather than written to `config.toml` — it is already keyed provider → model, already
+      versioned, and already discarded when a provider is saved, which is the invalidation this
+      needs. A hand-set value must still win over a discovered one
+- [ ] Read `context_length` from OpenRouter's `/api/v1/models` during discovery
+- [ ] Read `max_context_length` from LM Studio's `/api/v0/models`
+- [ ] Read Ollama's **`num_ctx`** from `POST /api/show`, parsed out of the `parameters` string,
+      and **never** the architecture's `context_length` — with a test pinning both against a
+      captured response so the wrong field cannot be substituted later by someone reading
+      `model_info` and finding a plausible key
+- [ ] Show a discovered window as discovered in Settings, distinct from one that was typed. A
+      number Magi guessed and a number the user asserted must not look the same, because only
+      one of them is worth trusting when an answer comes back truncated
+
+## Deferred: the text estimator is wrong in the unsafe direction for CJK
+
+Outside the summary table, same as the sections around it.
+
+Found while making the history budget per-provider, and deliberately not fixed in the same
+change: the budget now has a number to fit, which makes the accuracy of the *measurement*
+matter in a way it did not when the budget was an arbitrary constant.
+
+`history::estimate_text` divides characters by four. The doc comment on `CHARS_PER_TOKEN`
+already says it is "less accurate for Spanish and worse for CJK", and claims the rounding-up
+plus a four-token per-message overhead compensate. **They do not, and cannot.** Those add a
+constant; the error is multiplicative. A per-message `+4` cannot offset a per-character
+factor, so the longer the message the further off it gets — and it errs by *under*-counting,
+which is the direction the module elsewhere goes out of its way to avoid.
+
+This is not hypothetical for Magi. M4 ships speech-to-text in ninety-nine languages and the
+changelog names Japanese specifically, so a Japanese thread is an ordinary use of the app,
+not an edge case. A Japanese, Chinese or Korean conversation is measured as far cheaper than
+it is, and `fit` therefore keeps more of it than the budget intends — the provider's
+context-length error, at exactly the point truncation was supposed to prevent one.
+
+What is *not* known is the size of the factor. It should be measured against real tokenisers
+rather than asserted: CJK text is much denser in tokens per character than English under BPE,
+but how much depends on the tokeniser, and Magi does not have the model's. Recording an
+unverified multiplier here would repeat the mistake of the comment being corrected.
+
+Deliberately separate from the per-provider budget work, because changing the estimator
+changes truncation for **every** user, language and provider, which is a far wider blast
+radius than adding an optional per-provider setting.
+
+- [ ] Measure it before changing it: take a few representative strings — English, Spanish,
+      Japanese, Chinese, Korean, and mixed — and compare `estimate_text` against a real
+      tokeniser's count. Write the measured ratios into the skill or this file. The vision
+      probe's lesson applies: the bug there survived ten passing tests and died when someone
+      looked at the actual artefact
+- [ ] Make the estimate script-aware — most cheaply by counting characters outside Latin-1 at
+      a different rate rather than by embedding a tokeniser, which would tie Magi to one
+      vendor's and defeat being model-agnostic
+- [ ] Correct the `CHARS_PER_TOKEN` doc comment either way. It currently states a compensation
+      that does not hold, which is worse than stating the limitation plainly
 
 ## Deferred: what a conversation costs
 

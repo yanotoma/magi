@@ -12,6 +12,7 @@ pub mod error;
 pub mod hotkey;
 pub mod llm;
 pub mod permissions;
+pub mod session;
 pub mod stt;
 pub mod tray;
 pub mod voice;
@@ -120,6 +121,9 @@ pub fn run() {
                 screen: std::sync::Arc::new(crate::capture::ScreenCaptureKit::new()),
                 #[cfg(not(target_os = "macos"))]
                 screen: std::sync::Arc::new(crate::capture::FakeCapture::headless()),
+                session: std::sync::Arc::new(crate::session::Session::new()),
+                last_capture: Mutex::new(None),
+                panel_hidden_at: Mutex::new(None),
                 capture_log: std::sync::Arc::new(crate::capture::CaptureLog::new()),
                 in_flight: Mutex::new(None),
             });
@@ -170,6 +174,8 @@ pub fn run() {
             commands::open_permission_settings,
             commands::send_text_turn,
             commands::cancel_turn,
+            commands::clear_session,
+            commands::prompt_templates,
         ])
         .on_window_event(|window, event| {
             // Closing a window must never quit a tray app. Hide instead, and let

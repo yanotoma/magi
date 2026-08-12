@@ -47,10 +47,12 @@ fn begin(app: &tauri::AppHandle) {
 
     match state.microphone.start() {
         Ok(()) => {
+            crate::session::report(app, crate::session::Event::Held);
             let _ = app.emit("magi://voice", VoiceState::Recording);
         }
         Err(error) => {
             tracing::warn!(%error, "could not start recording");
+            crate::session::report(app, crate::session::Event::Stopped);
             let _ = app.emit("magi://voice", VoiceState::Idle);
             // A denied microphone is the case worth naming: the fix is in System
             // Settings, which no error about a device would ever suggest.
@@ -75,6 +77,7 @@ fn finish(app: &tauri::AppHandle) {
         Err(AudioError::Empty) => return,
         Err(error) => {
             tracing::warn!(%error, "could not stop recording");
+            crate::session::report(app, crate::session::Event::Stopped);
             let _ = app.emit("magi://voice", VoiceState::Idle);
             let _ = app.emit("magi://voice-error", error.to_string());
             return;
@@ -106,10 +109,12 @@ fn finish(app: &tauri::AppHandle) {
             seconds = captured.duration_seconds(),
             "too short to transcribe; ignoring"
         );
+        crate::session::report(app, crate::session::Event::Stopped);
         let _ = app.emit("magi://voice", VoiceState::Idle);
         return;
     }
 
+    crate::session::report(app, crate::session::Event::Released);
     let _ = app.emit("magi://voice", VoiceState::Transcribing);
 
     let app = app.clone();
@@ -129,6 +134,9 @@ fn finish(app: &tauri::AppHandle) {
         };
 
         let result = transcriber.transcribe(&captured.samples);
+        // Whatever came back, transcription is over. Reported before the outcome is
+        // examined, so an error path cannot leave the indicator spinning.
+        crate::session::report(&app, crate::session::Event::Transcribed);
         let _ = app.emit("magi://voice", VoiceState::Idle);
 
         match result {

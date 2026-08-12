@@ -43,17 +43,31 @@ codesign --force --deep --sign - --identifier "$IDENTIFIER" "$APP"
 echo "==> Signature"
 codesign -dv "$APP" 2>&1 | grep -E "^(Identifier|Signature|Info.plist)"
 
+# Reset TCC for this bundle, every build, on purpose.
+#
+# An ad-hoc signature has no Team ID to anchor to, so TCC validates against the binary's
+# cdhash — which changes on every rebuild. The entry in System Settings survives and stops
+# matching, which produces the worst available state: the switch reads as on and the app reads
+# as denied, with nothing to explain the disagreement. Half an hour went into diagnosing that
+# once.
+#
+# Scoped to the bundle id. Without it, `tccutil reset All` would clear every application's
+# permissions on the machine.
+echo "==> Resetting permissions for $IDENTIFIER"
+tccutil reset All "$IDENTIFIER" || echo "    (nothing to reset)"
+
 cat <<EOF
 
 ==> Built $APP
 
-Run it, and note that the running instance is what matters:
+Not launched: opening it is the maintainer's, so a build does not steal focus.
 
-  1. Quit any Magi started by \`npm run tauri dev\` — two instances fight over the hotkey.
-  2. open "$APP"
-  3. Settings › Screen › "Ask macOS for permission". Magi should now appear in the list.
-  4. Turn it on, then QUIT AND REOPEN Magi. macOS does not hand the permission to a
-     process that is already running, and skipping this looks exactly like the grant
-     having done nothing.
-  5. Settings › Screen › "Take a test screenshot".
+  open "$APP"
+
+Permissions were reset, so the first run asks again:
+
+  1. Settings › Screen › "Ask macOS for permission", then turn Magi on in the list.
+  2. QUIT AND REOPEN. macOS does not hand the permission to a process that is already
+     running, and skipping this looks exactly like the grant having done nothing.
+  3. The microphone asks on the first push-to-talk, not at launch — that is by design.
 EOF

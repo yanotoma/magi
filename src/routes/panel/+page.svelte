@@ -9,6 +9,12 @@
     sendTextTurn,
     type VoiceState,
     onCaptured,
+    onSessionState,
+    type SessionState,
+    onTrimmed,
+    clearSession,
+    promptTemplates,
+    type PromptTemplate,
   } from "$lib/ipc";
   import { renderMarkdown } from "$lib/markdown";
   import {
@@ -41,6 +47,67 @@
    *  in Magi a user would want to notice happening, and the audit log in Settings answers
    *  it afterwards rather than at the moment. Cleared when the turn ends. */
   let captured = $state<string | null>(null);
+
+  /** What the backend says is happening.
+   *
+   *  The authority, replacing what this file used to infer from a dozen separate events.
+   *  Kept alongside the local derivations rather than replacing them wholesale: the panel
+   *  still owns what it *shows*, and this owns what is *true*. Where the two disagree the
+   *  backend wins, because it is the side that knows. */
+  let sessionState = $state<SessionState>("idle");
+
+  /** How many older messages the last request dropped, or null.
+   *
+   *  Shown once and then left alone until the next trim: it describes something that already
+   *  happened, so repeating it on every later turn would read as it happening again. */
+  let trimmed = $state<number | null>(null);
+
+  /** One-click questions, from the backend so they match what the model can do. */
+  let templates = $state<PromptTemplate[]>([]);
+
+  $effect(() => {
+    // Re-read on every panel open rather than once at startup: the active model can change in
+    // Settings while the panel is closed, and a shortcut offering to read the screen after a
+    // switch to a text-only model is the exact promise this list exists to avoid making.
+    promptTemplates()
+      .then((offered) => (templates = offered))
+      .catch(() => (templates = []));
+  });
+
+  // Clicking away dismisses — but only when nothing is in flight.
+  //
+  // The guard is the whole design here. Dismissing on focus loss unconditionally means
+  // glancing at another window while Magi is thinking throws the answer away, which is
+  // hostile in a way the user cannot undo: the thread is gone and the tokens are spent. A
+  // panel that stays put until the answer lands is the lesser surprise, and Escape still
+  // closes it at any time for anyone who means it.
+  $effect(() => {
+    const unlisten = getCurrentWindow().onFocusChanged(async ({ payload: focused }) => {
+      if (focused || busy) return;
+
+      // Hiding the window loses focus, so `dismiss` triggers this handler again. Checking
+      // visibility first is what keeps that from being a second pointless pass through
+      // `reset` and `dismissSession`.
+      if (await getCurrentWindow().isVisible()) await dismiss();
+    });
+    return () => {
+      unlisten.then((stop) => stop());
+    };
+  });
+
+  $effect(() => {
+    const stop = onTrimmed((dropped) => (trimmed = dropped));
+    return () => {
+      stop.then((unlisten) => unlisten());
+    };
+  });
+
+  $effect(() => {
+    const stop = onSessionState((state) => (sessionState = state));
+    return () => {
+      stop.then((unlisten) => unlisten());
+    };
+  });
 
   $effect(() => {
     // Unsubscribed by the returned function, like the others in this file.
@@ -134,10 +201,24 @@
     cancelStream();
   };
 
+  const clearThread = async () => {
+    if (busy) await stop();
+    reset();
+    captured = null;
+    trimmed = null;
+    await clearSession().catch(() => {});
+  };
+
   const dismiss = async () => {
     // Stop before hiding: a request left running would keep streaming into a
     // panel nobody is looking at, and still cost tokens.
     if (busy) await stop();
+
+    // The thread stays. Closing the panel is not ending the conversation — only **Clear**
+    // is. The design doc says otherwise, and this reverses it deliberately: Escape and
+    // clicking away are easy to do by accident, so discarding here charges a real cost every
+    // time it happens for a privacy benefit that only applies when somebody else is at the
+    // machine. Clear is unambiguous; nobody presses it by accident.
     await getCurrentWindow().hide();
   };
 
@@ -174,7 +255,12 @@
   <header data-tauri-drag-region>
     <span class="mark" data-tauri-drag-region>magi</span>
     {#if conversation.turns.length > 0}
-      <button type="button" class="ghost" onclick={reset}>Clear</button>
+      <!--
+        The only thing that discards. It clears both halves — what the panel shows and the
+        screenshot the backend kept for the next question — because a Clear that left an image
+        behind would be invisible state the user believed they had thrown away.
+      -->
+      <button type="button" class="ghost" onclick={clearThread}>Clear</button>
     {/if}
   </header>
 
@@ -221,7 +307,14 @@
           {/if}
 
           {#if captured}
-            <p class="looked">Read {captured}</p>
+            <!--
+              Present tense while the capture is happening, past tense after. The backend
+              says which, so the panel no longer has to guess from the arrival of an event
+              that has no matching "finished" counterpart.
+            -->
+            <p class="looked">
+              {sessionState === "capturing" ? "Reading" : "Read"} {captured}
+            </p>
           {/if}
 
           {#if waiting}
@@ -230,6 +323,44 @@
             <div class="md streaming">{@html renderMarkdown(conversation.streaming)}</div>
           {/if}
         </div>
+      </div>
+    {/if}
+
+    {#if trimmed !== null}
+      <!--
+        Above the composer rather than in the thread: it is a statement about the request,
+        not a turn in the conversation. Quiet, because it is information rather than a
+        problem — the answer is still coming.
+      -->
+      <p class="notice">
+        {trimmed} older message{trimmed === 1 ? "" : "s"} dropped to stay within the context
+        budget. Earlier turns are no longer part of what the model can see.
+      </p>
+    {/if}
+
+    {#if conversation.turns.length === 0 && conversation.streaming === null && templates.length}
+      <!--
+        Only on an empty thread. These are a way to start, not a toolbar — leaving them under a
+        conversation would put a row of buttons between the answer and the follow-up.
+
+        Clicking fills the box and focuses it; it does not send. One rule holds across the whole
+        panel: nothing is asked without the user pressing Enter. Voice obeys it because a
+        transcript can be wrong, and these obey it because "explain this error" is often worth a
+        few words of context before it goes.
+      -->
+      <div class="templates">
+        {#each templates as template (template.label)}
+          <button
+            type="button"
+            class="chip"
+            onclick={() => {
+              input = template.prompt;
+              composer?.focus();
+            }}
+          >
+            {template.label}
+          </button>
+        {/each}
       </div>
     {/if}
 
@@ -403,6 +534,32 @@
 
   /* Quiet, and above the answer. It is a statement about what Magi did, not part of
      what the model said. */
+  /* A row that wraps rather than scrolls: three or four chips fit at 520 points, and a
+     horizontal scroller hides the ones that matter behind a gesture nobody looks for. */
+  .templates {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 0 2px 8px;
+  }
+
+  /* Quieter than the composer and quieter than an answer. They are an offer, not an
+     instruction, and the panel already has enough competing for attention. */
+  .chip {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 999px;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    font-size: 11px;
+    padding: 4px 10px;
+  }
+
+  .chip:hover {
+    background: rgba(255, 255, 255, 0.14);
+  }
+
   .looked {
     font-size: 11px;
     margin: 0 0 6px;
@@ -447,6 +604,56 @@
   .md :global(ul),
   .md :global(ol),
   .md :global(blockquote),
+  /* Syntax colours, mapped from highlight.js's classes rather than imported as one of its
+     themes. Two reasons, and the second is the real one.
+
+     A theme is a stylesheet of forty-odd hex values, which is exactly the drift the tokens
+     in `app.css` exist to prevent. And a theme is fixed, while this panel is the documented
+     exception to those tokens precisely because it composites over an arbitrary desktop —
+     it is always a dark translucent surface, so one palette tuned for that is both simpler
+     and more correct than a theme designed for a white page.
+
+     Grouped by what a reader needs to tell apart, not by what hljs happens to emit. Its
+     class list is long; most of the distinctions are invisible at this size. */
+  .md :global(.hljs-keyword),
+  .md :global(.hljs-selector-tag),
+  .md :global(.hljs-literal),
+  .md :global(.hljs-built_in) {
+    color: rgb(199, 146, 234);
+  }
+
+  .md :global(.hljs-string),
+  .md :global(.hljs-attr),
+  .md :global(.hljs-regexp),
+  .md :global(.hljs-symbol) {
+    color: rgb(153, 209, 148);
+  }
+
+  .md :global(.hljs-number),
+  .md :global(.hljs-meta) {
+    color: rgb(240, 180, 130);
+  }
+
+  .md :global(.hljs-title),
+  .md :global(.hljs-title.function_),
+  .md :global(.hljs-section),
+  .md :global(.hljs-name) {
+    color: rgb(130, 190, 240);
+  }
+
+  .md :global(.hljs-type),
+  .md :global(.hljs-class .hljs-title) {
+    color: rgb(240, 220, 140);
+  }
+
+  /* Comments are the one thing worth making quieter rather than another colour: a reader
+     scanning a snippet for the line that matters should be able to skip them. */
+  .md :global(.hljs-comment),
+  .md :global(.hljs-quote) {
+    color: rgba(255, 255, 255, 0.45);
+    font-style: italic;
+  }
+
   .md :global(pre) {
     margin: 0 0 0.55em;
   }

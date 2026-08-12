@@ -32,6 +32,7 @@
     PRESETS,
     type ConfigView,
     type ProviderKind,
+    type ProviderInput,
     type ProviderView,
     type Theme,
   } from "$lib/ipc";
@@ -107,11 +108,16 @@
 
   // `apiKey` starts undefined and stays that way unless the user types, so
   // editing an endpoint never silently drops a stored credential.
+  // `contextTokens` is a string rather than a number because the empty box has to
+  // mean "not set" and stay distinguishable from zero. A numeric input bound to a
+  // number would coerce a cleared field to 0, which the backend would reject as an
+  // implausible window — an error for the act of clearing something optional.
   let form = $state({
     id: "",
     kind: "openai-compatible" as ProviderKind,
     base_url: "",
     requires_key: false,
+    contextTokens: "",
     apiKey: undefined as string | undefined,
   });
 
@@ -480,6 +486,7 @@
       kind: "openai-compatible",
       base_url: "",
       requires_key: false,
+      contextTokens: "",
       apiKey: undefined,
     };
   };
@@ -548,19 +555,39 @@
       kind: provider.kind,
       base_url: provider.base_url,
       requires_key: provider.requires_key,
+      // Shown as what is stored. An empty box here would clear the window on the
+      // next save without the user having touched the field.
+      contextTokens: provider.context_tokens?.toString() ?? "",
       apiKey: undefined,
     };
   };
 
-  const formAsProvider = () => ({
-    id: form.id.trim(),
-    kind: form.kind,
-    base_url: form.base_url.trim(),
-    // Sorted so the saved order does not depend on the order things were clicked,
-    // which would otherwise show up as noise in a config.toml diff.
-    models: [...chosen].sort(),
-    requires_key: form.requires_key,
-  });
+  const formAsProvider = (): ProviderInput => {
+    const provider: ProviderInput = {
+      id: form.id.trim(),
+      kind: form.kind,
+      base_url: form.base_url.trim(),
+      // Sorted so the saved order does not depend on the order things were clicked,
+      // which would otherwise show up as noise in a config.toml diff.
+      models: [...chosen].sort(),
+      requires_key: form.requires_key,
+    };
+
+    // The key is added only when there is a number, never set to null or zero.
+    // Absent means "Magi does not know this window", which is a real state with its
+    // own behaviour — not a window of size nothing.
+    //
+    // Clamped into the range the backend can receive, so a typo comes back as Magi's
+    // own message naming the provider and the minimum, rather than as a serde
+    // complaint about a u32. `-1` clamps to 0 and gets told it is too small, which is
+    // the actionable version of the same rejection.
+    const window = Number.parseInt(form.contextTokens.trim(), 10);
+    if (Number.isFinite(window)) {
+      provider.context_tokens = Math.min(Math.max(window, 0), 4_294_967_295);
+    }
+
+    return provider;
+  };
 
   const submit = async (event: Event) => {
     event.preventDefault();
@@ -1255,6 +1282,27 @@
     <label>
       Endpoint
       <input bind:value={form.base_url} placeholder="http://localhost:11434/v1" required />
+    </label>
+
+    <!--
+      Optional, and worth leaving blank. Magi cannot ask most endpoints how big
+      their context window is, so the alternative to being told is a conservative
+      constant that fits everything and suits nothing.
+    -->
+    <label>
+      Context window (optional)
+      <input
+        bind:value={form.contextTokens}
+        inputmode="numeric"
+        placeholder="leave blank if you are not sure"
+      />
+      <span class="hint-inline">
+        How many tokens this endpoint's models accept — 8192 for a typical local
+        model, 200000 for a hosted one. Setting it lets Magi keep more of a long
+        conversation on a large model, and stop sending threads a small one will
+        refuse. One value covers every model here, so where they differ, use the
+        smallest.
+      </span>
     </label>
 
     <label class="checkbox">
