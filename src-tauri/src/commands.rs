@@ -189,6 +189,13 @@ pub struct ProviderView {
     pub base_url: String,
     pub models: Vec<String>,
     pub requires_key: bool,
+
+    /// The context window in tokens, or `None` when it has not been set.
+    ///
+    /// Sent back so the form shows what is stored rather than an empty box that would
+    /// silently clear the value on the next save.
+    pub context_tokens: Option<u32>,
+
     pub has_key: bool,
     /// Enough to tell two keys apart, never enough to use one. `None` when no
     /// key is stored.
@@ -522,6 +529,7 @@ pub async fn get_config(state: State<'_, AppState>) -> CommandResult<ConfigView>
                 base_url: p.base_url.clone(),
                 models: p.models.clone(),
                 requires_key: p.requires_key,
+                context_tokens: p.context_tokens,
                 has_key: hint.is_some(),
                 key_hint: hint,
                 capabilities: probed.get(&p.id).cloned().unwrap_or_default(),
@@ -781,23 +789,6 @@ pub fn apply_theme(app: &tauri::AppHandle, theme: Theme) {
     }
 }
 
-/// How much room a reply gets. Generous: the panel scrolls, and a truncated
-/// answer is worse than a long one.
-const MAX_TOKENS: u32 = 4096;
-
-/// How many tokens of conversation history may be sent.
-///
-/// A cap on growth rather than a fit to any particular model, and generous on purpose. What
-/// this exists to stop is a thread that grows until the provider refuses it — which, with a
-/// screenshot resent every turn, arrives sooner than length suggests: six questions with one
-/// image among them have paid for that image six times.
-///
-/// It does not attempt to match a context window, because Magi does not know one. A small
-/// local model with 4k of context will refuse a long thread whether or not this trims it, and
-/// choosing a number small enough for the smallest model would penalise every larger one.
-/// Making it per-provider is the real answer and is recorded as a task.
-const HISTORY_BUDGET: u32 = 16_000;
-
 /// Replaces the standing context sent with every turn.
 #[tauri::command]
 pub async fn set_prompt_context(
@@ -962,11 +953,41 @@ pub async fn send_text_turn(
         );
     }
 
+    // Built here rather than inside the request below, because the tool definitions are part
+    // of what the context window has to hold — 1.7 KB of JSON schema is 400-odd tokens, and
+    // history cannot be budgeted without subtracting them first.
+    //
+    // Offered to exactly one tier, matching what the system prompt says. A model that
+    // malforms tool syntax must not be handed a definition to malform, and one that cannot
+    // see has nothing to do with a screenshot.
+    let tools = if tier.offers_capture_tool() {
+        // Counted per turn rather than cached: a monitor can be unplugged between
+        // questions, and a tool description that claims three when there is one sends
+        // the model looking for screens that are not there.
+        //
+        // Falls back to one on failure. Claiming a single display when there are three
+        // costs a wrong answer the user can correct by asking again; claiming three when
+        // enumeration is broken costs every turn three captures that cannot happen.
+        vec![crate::llm::tools::capture_screen(
+            state.screen.displays().map(|d| d.len()).unwrap_or(1).max(1),
+        )]
+    } else {
+        Vec::new()
+    };
+
+    // How the window divides between the conversation and the reply. With no window
+    // configured this is the constant that was here before and the reply cap Magi always
+    // asked for — the feature costs a user who configures nothing exactly nothing.
+    let plan = crate::llm::budget::plan(
+        provider_config.context_tokens,
+        crate::llm::budget::request_overhead(Some(&system), &tools),
+    );
+
     // Trimmed after the new question is appended, so the question is part of what is being
     // budgeted rather than an addition to whatever survived. `fit` never drops the newest
     // exchange, so the thing just pushed is safe.
     let before = messages.len();
-    let messages = crate::llm::history::fit(messages, HISTORY_BUDGET);
+    let messages = crate::llm::history::fit(messages, plan.history_budget);
     let dropped = before - messages.len();
     if dropped > 0 {
         tracing::info!(
@@ -987,24 +1008,12 @@ pub async fn send_text_turn(
         model,
         system: Some(system),
         messages,
-        max_tokens: MAX_TOKENS,
-        // Offered to exactly one tier, matching what the system prompt says. A model
-        // that malforms tool syntax must not be handed a definition to malform, and one
-        // that cannot see has nothing to do with a screenshot.
-        tools: if tier.offers_capture_tool() {
-            // Counted per turn rather than cached: a monitor can be unplugged between
-            // questions, and a tool description that claims three when there is one sends
-            // the model looking for screens that are not there.
-            //
-            // Falls back to one on failure. Claiming a single display when there are three
-            // costs a wrong answer the user can correct by asking again; claiming three when
-            // enumeration is broken costs every turn three captures that cannot happen.
-            vec![crate::llm::tools::capture_screen(
-                state.screen.displays().map(|d| d.len()).unwrap_or(1).max(1),
-            )]
-        } else {
-            Vec::new()
-        },
+        // Not a constant any more. On a large window this is the 4096 it always was; on a
+        // small one it is a quarter of the window, because reserving 4096 of an 8k model for
+        // a reply that is usually a few hundred tokens spends the conversation on space the
+        // model will not use.
+        max_tokens: plan.max_tokens,
+        tools,
     };
 
     let provider = registry::build(state.http.clone(), &provider_config, api_key);
@@ -1114,6 +1123,29 @@ pub async fn send_text_turn(
                 request
                     .messages
                     .push(answer_call(&app, call, &mut budget).await);
+            }
+
+            // Re-fitted before going round again. The budget was computed for the request
+            // that went out, and this is no longer that request: a capture result carries a
+            // full image, so up to three of them can add more than the conversation they
+            // were appended to. Leaving it unchecked meant the one path that grows a request
+            // mid-turn was the one path that never measured it.
+            //
+            // Safe here and nowhere earlier. `fit` keeps the newest exchange whole, so the
+            // calls just made and the results answering them stay together — which is the
+            // rule both APIs enforce and the reason `fit` drops exchanges rather than
+            // messages.
+            let before = request.messages.len();
+            request.messages = crate::llm::history::fit(
+                std::mem::take(&mut request.messages),
+                plan.history_budget,
+            );
+            let dropped = before - request.messages.len();
+            if dropped > 0 {
+                tracing::info!(dropped, "trimmed the conversation to fit a capture result");
+                if let Err(error) = app.emit("magi://trimmed", dropped) {
+                    tracing::warn!(%error, "could not report the trim");
+                }
             }
         }
     });

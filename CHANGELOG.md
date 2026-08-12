@@ -7,12 +7,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ## [Unreleased]
 
 ### Added
+- **Tell Magi how much your model can hold.** Each provider in Settings now takes an optional context window, and Magi budgets the conversation against it: a 200k model keeps far more of a long thread than before, and a small local one stops being sent threads it would refuse. Leave it blank and nothing changes — Magi does not guess a number it was not given
 - **One-click questions.** An empty panel offers a few ready-made questions — "Explain this error", "What's on screen?" — and clicking one fills the box so you can add to it before asking. Only the ones your model can actually answer are shown: a model that cannot see the screen is not offered to summarise it
 - **Coloured code.** Code blocks in an answer are syntax-highlighted, in a palette tuned for the panel rather than a theme designed for a white page
 
 ### Changed
 - **Closing the panel no longer throws away the conversation.** Escape, clicking away, the hotkey and the tray menu all just hide it — reopen and your thread is where you left it. Only **Clear** discards. Previously two of those four ended the conversation and two did not, and nothing told you which was which
 - A screenshot Magi took is released from memory five minutes after the panel is closed. The conversation itself is kept: the text is small and is the part worth continuing, while the image is a picture of what was on your screen
+
+### Fixed
+- A model that takes screenshots while answering could overrun its own context. The conversation was measured before the request went out, and a screenshot the model asked for was added afterwards without being counted — up to three of them, each the size of an image. It is measured again after each one now
+- On a model with a small context window, Magi reserved room for a 4096-token reply whether or not the window could spare it, and took the space out of the conversation. A reply now claims at most a quarter of a small window, leaving the thread the larger share. Only applies where you have told Magi the window
 
 
 ## [0.4.0-alpha.1] - 2026-08-10

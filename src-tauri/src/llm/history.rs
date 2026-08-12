@@ -37,14 +37,24 @@ const CHARS_PER_TOKEN: u32 = 4;
 /// Added per message for the role and framing every family wraps around one.
 const MESSAGE_OVERHEAD: u32 = 4;
 
+/// Roughly what a string costs, with no per-message framing added.
+///
+/// Separate from [`estimate_tokens`] because the system prompt and the tool schemas are
+/// measured too — they are subtracted from the context window by [`crate::llm::budget`] — and
+/// neither is a message. Two estimators would be two answers to "how long is this string",
+/// drifting apart in the direction that hurts: that figure is subtracted from the window, so
+/// under-counting it over-spends on history.
+pub fn estimate_text(text: &str) -> u32 {
+    (text.chars().count() as u32).div_ceil(CHARS_PER_TOKEN)
+}
+
 /// Roughly what a message costs.
 ///
 /// Deliberately an over-estimate. Being wrong in the direction of truncating slightly early
 /// costs a turn of context; being wrong the other way costs the whole request, and the error
 /// arrives as a provider rejection the user cannot act on.
 pub fn estimate_tokens(message: &Message) -> u32 {
-    let text = message.text().chars().count() as u32;
-    let mut total = MESSAGE_OVERHEAD + text.div_ceil(CHARS_PER_TOKEN);
+    let mut total = MESSAGE_OVERHEAD.saturating_add(estimate_text(message.text()));
 
     for image in images_of(message) {
         total = total.saturating_add(image_tokens(image));

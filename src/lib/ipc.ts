@@ -38,6 +38,13 @@ export type ProviderView = {
   base_url: string;
   models: string[];
   requires_key: boolean;
+  /**
+   * The context window in tokens, or null when it has not been set.
+   *
+   * Null is the common case and means Magi does not know: the history budget
+   * falls back to a conservative constant rather than a guess.
+   */
+  context_tokens: number | null;
   /** Whether a key is stored. The key itself never reaches the frontend. */
   has_key: boolean;
   /**
@@ -90,6 +97,12 @@ export type ProviderInput = {
   base_url: string;
   models: string[];
   requires_key: boolean;
+  /**
+   * Omitted entirely when the user has not set one — not sent as null or zero.
+   * The backend rejects an implausibly small window rather than believing it,
+   * and treats an absent key as "unknown", which is a different thing.
+   */
+  context_tokens?: number;
 };
 
 export const getConfig = async (): Promise<ConfigView> => invoke<ConfigView>("get_config");

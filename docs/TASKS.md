@@ -2,10 +2,10 @@
 
 Complete breakdown of what is done and what is pending, across every milestone.
 
-**Last updated:** 2026-08-10
-**Current phase:** M5 — screen capture & agentic vision, targeting `0.4.0-alpha.1`
-**Current version:** `0.2.0-alpha.2` (released — see [VERSIONING.md](VERSIONING.md))
-**Overall:** 130 / 163 tasks done (80%)
+**Last updated:** 2026-08-12
+**Current phase:** M6 — session machine & panel UX, targeting `0.5.0-beta.1`
+**Current version:** `0.4.0-alpha.1` (released — see [VERSIONING.md](VERSIONING.md))
+**Overall:** 131 / 163 tasks done (80%)
 
 Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 
@@ -21,9 +21,9 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 | **M3** | Pre-flight & capability tiers | `0.2.0-alpha.2` | 13 | 14 | ✅ Shipped |
 | **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 27 | 27 | ✅ Shipped |
 | **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 15 | 16 | ✅ Shipped |
-| **M6** | Session machine & panel UX | `0.5.0-beta.1` | 17 | 19 | 🔨 In progress |
+| **M6** | Session machine & panel UX | `0.5.0-beta.1` | 18 | 19 | 🔨 In progress |
 | **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 14 | ⬜ |
-| — | **v1 total** | `1.0.0` | **130** | **149** | |
+| — | **v1 total** | `1.0.0` | **131** | **149** | |
 | **M8** | v2 — wake word & TTS | `1.1.0` | 0 | 9 | 🔮 Post-v1 |
 | **M9** | v3 — computer use | `1.2.0` | 0 | 5 | 🔮 Post-v1 |
 
@@ -225,7 +225,7 @@ Deliberately not the session state machine, which is M6's. This is the smallest 
 - [x] `session.rs` — the state machine (Idle → Listening → Transcribing → Thinking → Capturing → Streaming → Idle)
 - [x] Conversation thread held in memory; discarded on dismiss. The discard was missing until M6 began: `reset` existed, was imported by the panel, and had no caller, so dismissing hid a thread that returned on reopening — against a design-doc promise made twice, and a privacy one at that
 - [x] History assembly with a token budget and truncation strategy. Drops whole *exchanges* oldest-first, never a message: both APIs reject a tool call with no matching result, so splitting one would break the request rather than shorten the conversation. It stops rather than skips, since a thread missing a turn from its middle reads as the user having changed the subject and back. The newest exchange always survives — an over-budget request at least produces the provider's own error, while sending nothing answers a question nobody asked. Text is over-estimated on purpose; images are exact, read from the PNG header Magi itself wrote
-- [ ] Make the history budget per-provider. It is one conservative constant today, which bounds growth but matches no particular context window — Magi does not know one. A 4k local model will still refuse a long thread, and choosing a number small enough for it would penalise every larger model
+- [x] Make the history budget per-provider. `context_tokens` on a provider in `config.toml`, settable in Settings, and absent by default — Magi still does not guess, and a user who sets nothing gets the constant that was there before, which is asserted rather than described. What the task under-specified is that **a context window is not a budget**: the window holds the system prompt, the tool schemas, the history *and* the reply, so `llm::budget` returns both numbers from one subtraction. Two things fell out of knowing the window that were invisible without it. `max_tokens` was a flat 4096, which on an 8k model reserves half the window for a reply of a few hundred tokens and charges the conversation for it — a reply now takes at most a quarter of a small window. And the tool-calling loop appended capture results to a request whose budget had already been spent, so the one path that grows a request mid-turn was the one path that never measured it; it re-fits now, which is safe because `fit` keeps the newest exchange whole and a call therefore never parts from its result
 - [x] The panel toggle lives in `session` — renamed from this task's `toggle_session`, which described moving the state machine out of `Idle`. That came from the original interaction model where one hotkey opened the panel *and* the microphone; M2 split them. Opening a window is not an activity, so the session state is deliberately untouched and the panel being open is reported through `ShellState::PanelOpen`. What the task was really about is layering: `windows.rs` had grown calls into `commands` and `session`, because orchestration is easiest to put wherever the window handle already is, and `CLAUDE.md` makes `session.rs` the only module allowed to know about the others. It is a leaf again
 - [x] Emit `magi://state` from the session machine. `magi://token` and `magi://error` already exist — as do nine more events added since this was written, which is itself the argument for one state event rather than a growing vocabulary the panel has to infer from
 - [x] Cancellation — dismissing mid-stream actually aborts the request. `dismiss()` calls `stop()`, which is `cancelTurn()` plus `cancelStream()`; the backend aborts the task, which drops the receiver so the provider stops on its next send. Both halves are needed — an aborted task cannot emit a completion, so nothing would clear the streaming state and the panel would sit showing Stop
@@ -494,6 +494,96 @@ Cheapest first, and each step is useful without the next:
       day and their questions about it. SQLite for storage when it happens; embeddings only if
       retrieval proves necessary after summarisation, and local ones, or the privacy promise
       goes with them
+
+## Deferred: asking the endpoint how big its window is
+
+Outside the summary table, same as the sections around it.
+
+`context_tokens` is per provider and typed by hand. That is honest and it is enough for the
+common case — one local model, or one hosted family — but it is wrong in two places. An
+endpoint serving many models has one number for all of them, so it has to be the smallest to
+be safe: OpenRouter's catalogue runs from 4k to over a million, and pinning it at 4k penalises
+every model on the list. And a number typed by hand is a number that goes stale silently.
+
+Some endpoints will say. **None of them is the OpenAI listing route Magi already calls** —
+`GET /v1/models` returns ids and nothing else, which is why `discovery.rs` reads only
+`data[].id`. Each source below is a separate request in a separate shape:
+
+- **OpenRouter** — `GET /api/v1/models` carries `context_length` per model. The cleanest of
+  the three, and the one where per-model matters most.
+- **LM Studio** — `GET /api/v0/models` carries `max_context_length` and
+  `loaded_context_length`. Its own namespace, not `/v1`.
+- **Ollama** — `POST /api/show`, and **the trap is here**. The response has both
+  `model_info["<arch>.context_length"]`, which is what the architecture was *trained* for, and
+  a `parameters` string carrying `num_ctx`, which is what the server actually *loaded*. They
+  routinely disagree by more than an order of magnitude, in the dangerous direction. Ollama's
+  own documentation shows it: the same example response reads
+  `"parameters": "temperature 0.7\nnum_ctx 2048"` beside `"gemma4.context_length": 131072`.
+  Reading the architecture figure and believing it would tell Magi 131072 about a model being
+  served at 2048 — a request 64× too large, built on a number Magi went and fetched, which is
+  worse than the conservative constant it replaced. `num_ctx` is the field that governs, and
+  it is prose inside a string rather than a typed value.
+- **Anthropic** — has no listing route and no per-model metadata. Its windows are documented
+  and not discoverable, and hardcoding them would put model facts in Magi that go stale
+  between releases: the 1M-context variants already make one number per vendor wrong.
+
+So this is not "parse one more field". It is three vendor-specific requests, one of which
+reports two contradictory numbers and needs the less obvious one.
+
+- [ ] Move `context_tokens` from per-provider to per-model, cached in `capabilities.json`
+      rather than written to `config.toml` — it is already keyed provider → model, already
+      versioned, and already discarded when a provider is saved, which is the invalidation this
+      needs. A hand-set value must still win over a discovered one
+- [ ] Read `context_length` from OpenRouter's `/api/v1/models` during discovery
+- [ ] Read `max_context_length` from LM Studio's `/api/v0/models`
+- [ ] Read Ollama's **`num_ctx`** from `POST /api/show`, parsed out of the `parameters` string,
+      and **never** the architecture's `context_length` — with a test pinning both against a
+      captured response so the wrong field cannot be substituted later by someone reading
+      `model_info` and finding a plausible key
+- [ ] Show a discovered window as discovered in Settings, distinct from one that was typed. A
+      number Magi guessed and a number the user asserted must not look the same, because only
+      one of them is worth trusting when an answer comes back truncated
+
+## Deferred: the text estimator is wrong in the unsafe direction for CJK
+
+Outside the summary table, same as the sections around it.
+
+Found while making the history budget per-provider, and deliberately not fixed in the same
+change: the budget now has a number to fit, which makes the accuracy of the *measurement*
+matter in a way it did not when the budget was an arbitrary constant.
+
+`history::estimate_text` divides characters by four. The doc comment on `CHARS_PER_TOKEN`
+already says it is "less accurate for Spanish and worse for CJK", and claims the rounding-up
+plus a four-token per-message overhead compensate. **They do not, and cannot.** Those add a
+constant; the error is multiplicative. A per-message `+4` cannot offset a per-character
+factor, so the longer the message the further off it gets — and it errs by *under*-counting,
+which is the direction the module elsewhere goes out of its way to avoid.
+
+This is not hypothetical for Magi. M4 ships speech-to-text in ninety-nine languages and the
+changelog names Japanese specifically, so a Japanese thread is an ordinary use of the app,
+not an edge case. A Japanese, Chinese or Korean conversation is measured as far cheaper than
+it is, and `fit` therefore keeps more of it than the budget intends — the provider's
+context-length error, at exactly the point truncation was supposed to prevent one.
+
+What is *not* known is the size of the factor. It should be measured against real tokenisers
+rather than asserted: CJK text is much denser in tokens per character than English under BPE,
+but how much depends on the tokeniser, and Magi does not have the model's. Recording an
+unverified multiplier here would repeat the mistake of the comment being corrected.
+
+Deliberately separate from the per-provider budget work, because changing the estimator
+changes truncation for **every** user, language and provider, which is a far wider blast
+radius than adding an optional per-provider setting.
+
+- [ ] Measure it before changing it: take a few representative strings — English, Spanish,
+      Japanese, Chinese, Korean, and mixed — and compare `estimate_text` against a real
+      tokeniser's count. Write the measured ratios into the skill or this file. The vision
+      probe's lesson applies: the bug there survived ten passing tests and died when someone
+      looked at the actual artefact
+- [ ] Make the estimate script-aware — most cheaply by counting characters outside Latin-1 at
+      a different rate rather than by embedding a tokeniser, which would tie Magi to one
+      vendor's and defeat being model-agnostic
+- [ ] Correct the `CHARS_PER_TOKEN` doc comment either way. It currently states a compensation
+      that does not hold, which is worse than stating the limitation plainly
 
 ## Deferred: what a conversation costs
 

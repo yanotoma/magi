@@ -40,6 +40,7 @@ mod tests {
             base_url: "http://localhost:9/v1".into(),
             models: vec!["m".into()],
             requires_key: false,
+            context_tokens: None,
         }
     }
 

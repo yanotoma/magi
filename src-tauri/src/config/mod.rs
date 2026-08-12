@@ -72,6 +72,19 @@ pub enum ConfigError {
 
     #[error("[voice] languages lists '{found}' twice")]
     DuplicateLanguage { found: String },
+
+    #[error(
+        "provider '{provider}' declares context_tokens = {found}, which is below the \
+         minimum of {minimum}. This is the model's context window in tokens — a few \
+         thousand at the very least, and typically 8192 or more. A number this small \
+         would leave no room for the conversation. Remove the line to let Magi use its \
+         own conservative default."
+    )]
+    ContextTokensTooSmall {
+        provider: String,
+        found: u32,
+        minimum: u32,
+    },
 }
 
 /// How a provider speaks, which decides which implementation handles it.
@@ -107,6 +120,23 @@ pub struct ProviderConfig {
     /// Whether this provider needs a key at all. Ollama and LM Studio do not.
     #[serde(default)]
     pub requires_key: bool,
+
+    /// How many tokens of context this endpoint's models accept, if it is known.
+    ///
+    /// `None` — the default, and the common case — means Magi has not been told, and it
+    /// does not guess: the history budget falls back to a conservative constant that
+    /// matches no particular model. Setting this is what lets a 200k model keep a long
+    /// conversation, and a 4k local one stop being sent threads it will refuse.
+    ///
+    /// Per provider rather than per model, which is a real limitation on an endpoint
+    /// serving many: OpenRouter's models range from 4k to over a million, and one number
+    /// for all of them has to be the smallest to be safe. It is one line to change and it
+    /// is visible in Settings, which beats the alternative of Magi choosing wrong silently.
+    ///
+    /// The window, not the budget. What is left for the conversation after the system
+    /// prompt, the tools and room for the reply is worked out by [`crate::llm::budget`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_tokens: Option<u32>,
 }
 
 /// Which model is in use.
@@ -213,6 +243,17 @@ pub struct PromptConfig {
     /// whoever typed it is the person it would mislead.
     pub context: String,
 }
+
+/// The smallest context window Magi will believe it was told about.
+///
+/// Below this the number is almost certainly a mistake — a count of thousands written as
+/// `context_tokens = 8` rather than `8192`, or a character count mistaken for a token one.
+/// Believing it would truncate every thread to the current question and present as amnesia,
+/// which is the kind of failure nobody thinks to look for in `config.toml`.
+///
+/// 2048 rather than something rounder because it is a real window: the smallest any model
+/// Magi is likely to meet actually ships with.
+const MIN_CONTEXT_TOKENS: u32 = 2048;
 
 /// The longest a language code can be, so a hand-edited file cannot smuggle prose in.
 const MAX_LANGUAGE_CODE: usize = 8;
@@ -380,6 +421,23 @@ impl Config {
     }
 
     fn validate(&self) -> Result<(), ConfigError> {
+        // A lower bound only, and deliberately so. Too small is the dangerous typo: it
+        // silently truncates every conversation to nothing, and reads as Magi forgetting
+        // what was just said. Too large is not policed, because the failure is loud and
+        // already well handled — the provider rejects the request and says why, which is
+        // more useful than Magi second-guessing a window it was told about.
+        for provider in &self.providers {
+            if let Some(found) = provider.context_tokens {
+                if found < MIN_CONTEXT_TOKENS {
+                    return Err(ConfigError::ContextTokensTooSmall {
+                        provider: provider.id.clone(),
+                        found,
+                        minimum: MIN_CONTEXT_TOKENS,
+                    });
+                }
+            }
+        }
+
         // Counted in characters, not bytes: the limit is about how much text the
         // user wrote, and `len()` would give a Spanish or Japanese context a
         // smaller allowance than an English one for the same amount of writing.
@@ -1002,6 +1060,153 @@ mod tests {
             "#,
         );
         assert!(matches!(result, Err(ConfigError::DuplicateProviderId(_))));
+    }
+
+    #[test]
+    fn a_provider_without_a_context_window_parses_and_says_it_does_not_know() {
+        // The common case, and the one the feature must not disturb: an existing
+        // config.toml has never heard of this key.
+        let config = Config::from_toml(
+            r#"
+            [[provider]]
+            id = "local"
+            kind = "openai-compatible"
+            base_url = "http://localhost:11434/v1"
+            models = ["a"]
+            "#,
+        )
+        .expect("a config without the key is still valid");
+
+        assert_eq!(config.providers[0].context_tokens, None);
+    }
+
+    #[test]
+    fn a_declared_context_window_is_read() {
+        let config = Config::from_toml(
+            r#"
+            [[provider]]
+            id = "anthropic"
+            kind = "anthropic"
+            base_url = "https://api.anthropic.com"
+            models = ["claude-sonnet-5"]
+            context_tokens = 200000
+            "#,
+        )
+        .expect("a declared window is valid");
+
+        assert_eq!(config.providers[0].context_tokens, Some(200_000));
+    }
+
+    #[test]
+    fn an_implausibly_small_context_window_is_rejected_rather_than_believed() {
+        // `context_tokens = 8` is a count of thousands written wrong. Believing it would
+        // truncate every thread to the current question, which presents as Magi forgetting
+        // what was just said — and nobody debugging that looks in config.toml.
+        let result = Config::from_toml(
+            r#"
+            [[provider]]
+            id = "local"
+            kind = "openai-compatible"
+            base_url = "http://localhost:11434/v1"
+            models = ["a"]
+            context_tokens = 8
+            "#,
+        );
+
+        assert!(matches!(
+            result,
+            Err(ConfigError::ContextTokensTooSmall { found: 8, .. })
+        ));
+    }
+
+    #[test]
+    fn the_rejection_names_the_provider_it_came_from() {
+        // With several providers configured, "a context window is too small" is not an
+        // actionable message. Which file line to edit is the whole content of the error.
+        let result = Config::from_toml(
+            r#"
+            [[provider]]
+            id = "fine"
+            kind = "openai-compatible"
+            base_url = "http://localhost:11434/v1"
+            models = ["a"]
+            context_tokens = 8192
+
+            [[provider]]
+            id = "typo"
+            kind = "openai-compatible"
+            base_url = "http://localhost:1234/v1"
+            models = ["b"]
+            context_tokens = 100
+            "#,
+        );
+
+        match result {
+            Err(ConfigError::ContextTokensTooSmall { provider, .. }) => {
+                assert_eq!(provider, "typo");
+            }
+            other => panic!("expected the small window to be rejected, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_smallest_real_window_is_accepted() {
+        // The bound rejects mistakes, not small models. 2048 is a window that ships.
+        let config = Config::from_toml(
+            r#"
+            [[provider]]
+            id = "local"
+            kind = "openai-compatible"
+            base_url = "http://localhost:11434/v1"
+            models = ["a"]
+            context_tokens = 2048
+            "#,
+        )
+        .expect("2048 is a real context window");
+
+        assert_eq!(config.providers[0].context_tokens, Some(2048));
+    }
+
+    #[test]
+    fn an_unknown_window_is_not_written_back_as_a_key() {
+        // config.toml is meant to be readable and pasteable into a bug report. A file
+        // full of keys nobody set is noise, and `context_tokens = ` is not valid TOML.
+        let config = Config::from_toml(
+            r#"
+            [[provider]]
+            id = "local"
+            kind = "openai-compatible"
+            base_url = "http://localhost:11434/v1"
+            models = ["a"]
+            "#,
+        )
+        .expect("valid");
+
+        let written = toml::to_string(&config).expect("a config with no window serialises");
+        assert!(
+            !written.contains("context_tokens"),
+            "an unset window should leave no trace:\n{written}"
+        );
+    }
+
+    #[test]
+    fn a_declared_window_survives_a_round_trip() {
+        let config = Config::from_toml(
+            r#"
+            [[provider]]
+            id = "local"
+            kind = "openai-compatible"
+            base_url = "http://localhost:11434/v1"
+            models = ["a"]
+            context_tokens = 8192
+            "#,
+        )
+        .expect("valid");
+
+        let written = toml::to_string(&config).expect("serialises");
+        let read_back = Config::from_toml(&written).expect("re-reads");
+
+        assert_eq!(read_back.providers[0].context_tokens, Some(8192));
     }
 
     #[test]
