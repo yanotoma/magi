@@ -16,6 +16,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - A screenshot Magi took is released from memory five minutes after the panel is closed. The conversation itself is kept: the text is small and is the part worth continuing, while the image is a picture of what was on your screen
 
 ### Fixed
+- **Magi now runs on Intel Macs.** Every build so far was Apple Silicon only, so an Intel Mac would have downloaded a disk image it could not open. Builds are universal from here, and the build itself now checks both architectures are present rather than assuming
 - A model that takes screenshots while answering could overrun its own context. The conversation was measured before the request went out, and a screenshot the model asked for was added afterwards without being counted — up to three of them, each the size of an image. It is measured again after each one now
 - On a model with a small context window, Magi reserved room for a 4096-token reply whether or not the window could spare it, and took the space out of the conversation. A reply now claims at most a quarter of a small window, leaving the thread the larger share. Only applies where you have told Magi the window
 

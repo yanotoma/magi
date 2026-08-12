@@ -5,7 +5,7 @@ Complete breakdown of what is done and what is pending, across every milestone.
 **Last updated:** 2026-08-12
 **Current phase:** M6 — session machine & panel UX, targeting `0.5.0-beta.1`
 **Current version:** `0.4.0-alpha.1` (released — see [VERSIONING.md](VERSIONING.md))
-**Overall:** 131 / 163 tasks done (80%)
+**Overall:** 139 / 163 tasks done (85%)
 
 Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 
@@ -22,8 +22,8 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 | **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 27 | 27 | ✅ Shipped |
 | **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 15 | 16 | ✅ Shipped |
 | **M6** | Session machine & panel UX | `0.5.0-beta.1` | 18 | 19 | 🔨 In progress |
-| **M7** | Packaging & macOS release | `0.6.0-beta.1` | 0 | 14 | ⬜ |
-| — | **v1 total** | `1.0.0` | **131** | **149** | |
+| **M7** | Packaging & macOS release | `0.6.0-beta.1` | 8 | 14 | 🔨 In progress |
+| — | **v1 total** | `1.0.0` | **139** | **149** | |
 | **M8** | v2 — wake word & TTS | `1.1.0` | 0 | 9 | 🔮 Post-v1 |
 | **M9** | v3 — computer use | `1.2.0` | 0 | 5 | 🔮 Post-v1 |
 
@@ -257,20 +257,27 @@ Deliberately not the session state machine, which is M6's. This is the smallest 
 
 ## M7 — Packaging & macOS release
 
-- [ ] Configure `tauri.conf.json` bundle settings and app identifier
-- [ ] App icon set, all required sizes
-- [ ] `Info.plist` usage descriptions for Microphone and Screen Recording
-- [ ] Enable `macOSPrivateApi` for window transparency (documented tradeoff: blocks App Store)
-- [ ] Universal binary (aarch64 + x86_64)
-- [ ] Code signing with a Developer ID certificate
-- [ ] Notarization and stapling
-- [ ] DMG with a drag-to-Applications layout
-- [ ] Verify how each bundle format handles pre-release identifiers (`-alpha.1`); adopt a monotonic build number if they are dropped
-- [ ] GitHub Actions release workflow triggered by `v*` tags, marking pre-release versions as GitHub pre-releases
-- [ ] Keep `CHANGELOG.md` current — every user-visible change lands in `Unreleased` in the same PR
+Four of these were already true when the milestone opened, done incidentally by M1–M5 rather
+than skipped — the identifier since M1, the icons when the mark was drawn, the microphone
+usage description with M4, transparency with the panel. They are ticked with the evidence that
+settled each one, because "0/14" invited redoing work that was done.
+
+One task turned out to rest on a wrong premise and is corrected below rather than performed.
+
+- [x] Configure `tauri.conf.json` bundle settings and app identifier. `identifier` has been `dev.magi.app` since M1 — it is also the TCC subject and the keychain service, so it could not have waited. Filled in here: `category`, `copyright`, `shortDescription` and `longDescription`, which are what a DMG shows in Finder's Get Info and were blank
+- [x] App icon set, all required sizes. `icons/icon.icns` carries the complete macOS set — verified by extracting it with `iconutil -c iconset`, which yields all ten variants (16, 32, 128, 256 and 512, each with its `@2x`). The loose PNGs beside it cover only 32/128/256/512, so an audit that counts files concludes 16×16 is missing; Tauri uses the supplied `.icns` and never rebuilds it from those, so it is not
+- [x] `Info.plist` usage descriptions for Microphone and Screen Recording. **The Screen Recording half of this task cannot be done, because the key does not exist.** `NSMicrophoneUsageDescription` is present and is Magi's own sentence. Screen Recording has no `NS*UsageDescription` counterpart — macOS supplies its own string for that prompt, which is why `.claude/skills/macos-permissions/SKILL.md` says so explicitly and why the in-app explanation in Settings → Screen is the only place Magi gets to state a reason. An automated audit of this repo proposed adding `NSScreenCaptureUsageDescription` as required-and-missing; it is neither, M5 shipped and was verified end to end without it, and adding it would have been a plausible-looking no-op that future readers would have trusted
+- [x] Enable `macOSPrivateApi` for window transparency (documented tradeoff: blocks App Store). Both halves are in place and both are needed: `app.macOSPrivateApi: true` in `tauri.conf.json` and the `macos-private-api` feature on the `tauri` dependency in `Cargo.toml`, where the comment records the trade
+- [x] Universal binary (aarch64 + x86_64). Magi had been shipping arm64-only — `codesign -dvv` on the bundle reported `Mach-O thin (arm64)`, so an Intel Mac would have downloaded a DMG it cannot run with nothing in the build saying so. CI builds `universal-apple-darwin` and then **asserts with `lipo -archs` that both architectures are present**, because passing the target is an instruction and not a result. The targets are added in the job rather than in `rust-toolchain.toml`, so the Linux jobs do not fetch two Apple targets they will never link
+- [ ] Code signing with a Developer ID certificate. **Blocked on credentials, not on work.** Needs `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `KEYCHAIN_PASSWORD` and `APPLE_SIGNING_IDENTITY` as repository secrets
+- [ ] Notarization and stapling. Blocked on the same, plus `APPLE_ID`, `APPLE_PASSWORD` (an app-specific password, not the account one) and `APPLE_TEAM_ID`. Note from the skill: a notarization failure returns a log *URL* and the actual reason is inside that JSON rather than in the CLI output, so the workflow has to fetch and print it. And **verifying on the build machine proves nothing** — Gatekeeper caches provenance for locally built apps, so the downloaded DMG has to be opened on a machine that has never seen it
+- [x] DMG with a drag-to-Applications layout. Window size and both icon positions pinned in `bundle.macOS.dmg` rather than inherited, so the window a user sees is described in this repo instead of in a dependency that may change its defaults. Configured, not yet looked at — the layout is two coordinate pairs and whether it *reads* right is a thing to open, which waits for a signed build worth opening
+- [x] Verify how each bundle format handles pre-release identifiers (`-alpha.1`); adopt a monotonic build number if they are dropped. **They are not dropped, so no build number is needed** — the task's own condition is unmet. Read from the built bundle's `Contents/Info.plist`: `CFBundleShortVersionString` and `CFBundleVersion` both carry `0.4.0-alpha.1` verbatim. Worth knowing that this is *out of spec and works anyway*: Apple documents both keys as period-separated integers, and `-alpha.1` is neither. It survives because nothing on the direct-distribution path parses them strictly — Finder displays the string and Gatekeeper does not care. The two places it would start to matter are the App Store, which Magi has already given up for window transparency, and `tauri-plugin-updater` below, which compares versions as semver and therefore handles pre-release identifiers *better* than a monotonic integer would
+- [ ] GitHub Actions release workflow triggered by `v*` tags, marking pre-release versions as GitHub pre-releases. Writable today, but it would be a workflow whose one interesting step — the signed, notarized bundle — cannot run, and a release workflow that has never produced a release is not evidence of anything. Waits on the certificate so that the first tag exercises it for real
+- [x] Keep `CHANGELOG.md` current — every user-visible change lands in `Unreleased` in the same PR. Enforced rather than remembered: `the_released_version_has_a_changelog_entry` in `src-tauri/tests/version_sync.rs` asserts the newest `## [x.y.z]` heading matches `package.json`, so a version bump cannot land without its section, nor a section without a bump
 - [ ] Auto-update via `tauri-plugin-updater`
 - [ ] First-run onboarding: permissions walkthrough, model choice, provider setup
-- [ ] Measure and publish idle RAM and CPU (the headline claim needs a number behind it)
+- [ ] Measure and publish idle RAM and CPU (the headline claim needs a number behind it). `tools/measure_idle.sh` is the harness; the number is what is still missing. Deliberately split that way, because a figure written down once cannot be checked later — the next person reading a regression cannot tell it from a first measurement taken on a busy laptop. The script refuses two things rather than reporting them: a **debug build**, whose memory is not the shipped app's, and a **loaded machine**, since idle is the whole quantity being measured and sampling during a build is exactly when it is tempting to. Run it on a settled machine against a release bundle, then put the median in `README.md` naming the Mac and the macOS version it came from
 
 ---
 
