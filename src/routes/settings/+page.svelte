@@ -16,6 +16,8 @@
     LANGUAGES,
     downloadSpeechModel,
     removeSpeechModel,
+    getLogs,
+    openLogFolder,
     openPermissionSettings,
     onDownloadProgress,
     getCapture,
@@ -28,6 +30,7 @@
     type DownloadProgress,
     type CaptureView,
     type CaptureSubject,
+    type LogView,
     MAX_PROMPT_CONTEXT,
     PRESETS,
     type ConfigView,
@@ -68,6 +71,7 @@
   let voiceError = $state<string | null>(null);
 
   let capture = $state<CaptureView | null>(null);
+  let logs = $state<LogView | null>(null);
   let captureError = $state<string | null>(null);
 
   /** Which model this window is downloading, tracked locally.
@@ -275,6 +279,17 @@
   // permission can change in System Settings while this window sits in the background.
   $effect(() => {
     if (pane === "screen") loadCapture();
+  });
+
+  // Re-read on each visit rather than once: `exists` turns true the first time anything
+  // is written, and a row that still says "nothing yet" after a session of use would
+  // have someone reporting the logging as broken.
+  $effect(() => {
+    if (pane === "general") {
+      getLogs()
+        .then((view) => (logs = view))
+        .catch(() => (logs = null));
+    }
   });
 
   const runCapture = async (action: () => Promise<CaptureView>) => {
@@ -721,6 +736,25 @@
         <p class="hint">
           Safe to share: API keys are in the macOS keychain, never in this file.
         </p>
+      {/if}
+
+      {#if logs?.directory}
+        <h2 class="spaced">Diagnostics</h2>
+        <code class="path">{logs.directory}</code>
+        <p class="hint">
+          When something stops working there is no window to crash and no terminal to
+          watch, so Magi keeps a log here. A week of it, then the oldest day is
+          dropped.
+        </p>
+        <p class="hint">
+          Safe to share, and deliberately so: it records what Magi did, never what you
+          asked or what a model answered. No questions, no transcripts, no window
+          titles.
+        </p>
+        <button type="button" onclick={() => openLogFolder()}>Show in Finder</button>
+        {#if !logs.exists}
+          <p class="hint">Nothing written yet.</p>
+        {/if}
       {/if}
     {/if}
 

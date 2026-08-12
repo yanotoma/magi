@@ -5,7 +5,7 @@ Complete breakdown of what is done and what is pending, across every milestone.
 **Last updated:** 2026-08-12
 **Current phase:** M6 — session machine & panel UX, targeting `0.5.0-beta.1`
 **Current version:** `0.4.0-alpha.1` (released — see [VERSIONING.md](VERSIONING.md))
-**Overall:** 139 / 163 tasks done (85%)
+**Overall:** 141 / 165 tasks done (85%)
 
 Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 
@@ -22,8 +22,8 @@ Legend: `[x]` done · `[ ]` pending · `[~]` in progress · `[!]` blocked
 | **M4** | Audio & speech-to-text | `0.3.0-alpha.1` | 27 | 27 | ✅ Shipped |
 | **M5** | Screen capture & agentic vision | `0.4.0-alpha.1` | 15 | 16 | ✅ Shipped |
 | **M6** | Session machine & panel UX | `0.5.0-beta.1` | 18 | 19 | 🔨 In progress |
-| **M7** | Packaging & macOS release | `0.6.0-beta.1` | 8 | 14 | 🔨 In progress |
-| — | **v1 total** | `1.0.0` | **139** | **149** | |
+| **M7** | Packaging & macOS release | `0.6.0-beta.1` | 10 | 16 | 🔨 In progress |
+| — | **v1 total** | `1.0.0` | **141** | **151** | |
 | **M8** | v2 — wake word & TTS | `1.1.0` | 0 | 9 | 🔮 Post-v1 |
 | **M9** | v3 — computer use | `1.2.0` | 0 | 5 | 🔮 Post-v1 |
 
@@ -275,6 +275,8 @@ One task turned out to rest on a wrong premise and is corrected below rather tha
 - [x] Verify how each bundle format handles pre-release identifiers (`-alpha.1`); adopt a monotonic build number if they are dropped. **They are not dropped, so no build number is needed** — the task's own condition is unmet. Read from the built bundle's `Contents/Info.plist`: `CFBundleShortVersionString` and `CFBundleVersion` both carry `0.4.0-alpha.1` verbatim. Worth knowing that this is *out of spec and works anyway*: Apple documents both keys as period-separated integers, and `-alpha.1` is neither. It survives because nothing on the direct-distribution path parses them strictly — Finder displays the string and Gatekeeper does not care. The two places it would start to matter are the App Store, which Magi has already given up for window transparency, and `tauri-plugin-updater` below, which compares versions as semver and therefore handles pre-release identifiers *better* than a monotonic integer would
 - [ ] GitHub Actions release workflow triggered by `v*` tags, marking pre-release versions as GitHub pre-releases. Writable today, but it would be a workflow whose one interesting step — the signed, notarized bundle — cannot run, and a release workflow that has never produced a release is not evidence of anything. Waits on the certificate so that the first tag exercises it for real
 - [x] Keep `CHANGELOG.md` current — every user-visible change lands in `Unreleased` in the same PR. Enforced rather than remembered: `the_released_version_has_a_changelog_entry` in `src-tauri/tests/version_sync.rs` asserts the newest `## [x.y.z]` heading matches `package.json`, so a version bump cannot land without its section, nor a section without a bump
+- [x] Somewhere for the logs to go. Added after the maintainer asked to see them and there was nothing to see: `tracing_subscriber::fmt()` writes to stdout, and a tray app opened from Finder has no stdout anyone reads. Checked rather than assumed — `log show --predicate 'process == "magi"'` over a real session returns nineteen thousand lines of XPC, AppKit and ScreenCaptureKit chatter and **zero** from any `magi::` target, so macOS instruments the process without capturing the application's own output. Now a rolling daily file in `~/Library/Logs/Magi`, a week retained, stdout kept beside it so `RUST_LOG=magi=debug` still works in development, and a **Diagnostics** section in Settings → General showing the path with a *Show in Finder* button — Finder hides `~/Library` by default, so a path alone is not an instruction most people can follow
+- [x] Make the logs safe to keep, first. A log nobody can read is also a log nobody can leak, and giving it a file removes that accident — so what Magi writes was audited before it was made durable, and the audit found four things. The **deictic phrase** that triggered a heuristic capture is a literal fragment of the user's question. A provider's **HTTP rejection body** can quote the request back. The model's own **tool arguments** contain a `reason` it writes by summarising what was asked. And three **absolute paths** carried the account name. The rule that came out of it, and the reason `LlmError::log_summary` exists beside `Display` rather than replacing it: **what Magi wrote travels, what the user or the model wrote does not** — authorship, not sensitivity in the abstract. The URL travels on purpose, because it already lives in a `config.toml` this project keeps pasteable, and an error that will not say what it tried to reach is the useless kind
 - [ ] Auto-update via `tauri-plugin-updater`
 - [ ] First-run onboarding: permissions walkthrough, model choice, provider setup
 - [ ] Measure and publish idle RAM and CPU (the headline claim needs a number behind it). `tools/measure_idle.sh` is the harness; the number is what is still missing. Deliberately split that way, because a figure written down once cannot be checked later — the next person reading a regression cannot tell it from a first measurement taken on a busy laptop. The script refuses two things rather than reporting them: a **debug build**, whose memory is not the shipped app's, and a **loaded machine**, since idle is the whole quantity being measured and sampling during a build is exactly when it is tempting to. Run it on a settled machine against a release bundle, then put the median in `README.md` naming the Mac and the macOS version it came from

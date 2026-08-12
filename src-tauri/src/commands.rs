@@ -1085,8 +1085,10 @@ pub async fn send_text_turn(
             let (result, ()) = tokio::join!(provider.turn(request.clone(), tx), forward);
 
             if let Err(error) = result {
+                // The log gets the summary, the user gets the whole thing. A provider's
+                // rejection body can quote the request back, and the log is now a file.
+                tracing::warn!(summary = %error.log_summary(), "turn failed");
                 let message = error.to_string();
-                tracing::warn!(%message, "turn failed");
                 crate::session::report(&app, crate::session::Event::Stopped);
                 if let Err(error) = app.emit("magi://error", message) {
                     tracing::warn!(%error, "could not emit the turn error");
@@ -1240,7 +1242,11 @@ async fn heuristic_capture(app: &tauri::AppHandle, text: &str) -> Vec<crate::llm
             // Not surfaced to the user. They did not ask for a screenshot — they asked a
             // question, and Magi guessed that a picture would help. A guess that failed
             // should not become an error report about a feature they never invoked.
-            tracing::warn!(%error, phrase = %deixis.phrase, "the heuristic capture failed");
+            // The phrase that triggered this is deliberately not logged. It is a literal
+            // fragment of what the user said — "this error", "esta pantalla" — and the log
+            // is now a file that outlives the run. What went wrong is diagnosable from the
+            // error; which words produced it is the user's business.
+            tracing::warn!(%error, "the heuristic capture failed");
             return Vec::new();
         }
         Err(error) => {
@@ -1709,7 +1715,12 @@ pub async fn download_speech_model(
 
     match result.map_err(to_message)? {
         Ok(path) => {
-            tracing::info!(path = %path.display(), "speech model ready");
+            // File name only — see the note in `lib.rs`. It also happens to be the more
+            // useful half: which model is ready, not where the home directory is.
+            tracing::info!(
+                file = %path.file_name().unwrap_or_default().to_string_lossy(),
+                "speech model ready"
+            );
             get_voice(state)
         }
         Err(DownloadError::Cancelled) => get_voice(state),
@@ -1854,6 +1865,53 @@ pub fn prompt_templates(
     Ok(crate::llm::templates::for_tier(
         crate::session::active_tier_of(&app),
     ))
+}
+
+/// Where Magi writes its log, and whether that directory exists yet.
+///
+/// The path is shown rather than only opened, because the two are for different moments:
+/// a button helps someone sitting in front of Settings, and a path helps someone reading
+/// an instruction in a GitHub issue with the app already closed.
+#[derive(Debug, Serialize)]
+pub struct LogView {
+    /// The directory, for display. `None` only if there is no home directory to put it in.
+    pub directory: Option<String>,
+    /// Whether anything has been written there yet.
+    pub exists: bool,
+}
+
+#[tauri::command]
+pub fn get_logs() -> LogView {
+    let directory = crate::logging::directory();
+
+    LogView {
+        exists: directory.as_ref().is_some_and(|d| d.is_dir()),
+        directory: directory.map(|d| d.display().to_string()),
+    }
+}
+
+/// Reveals the log folder in Finder.
+///
+/// Through the OS, the same way [`open_permission_settings`] reaches System Settings, and
+/// for the same reason: telling someone a path and expecting them to navigate Library —
+/// which Finder hides by default — is most of the difficulty of finding a log.
+#[tauri::command]
+pub fn open_log_folder() -> CommandResult<()> {
+    let directory =
+        crate::logging::directory().ok_or_else(|| "no home directory to log into".to_string())?;
+
+    // Created on demand rather than reported as missing. Magi makes this at startup, so an
+    // absence means logging failed to start — and opening an empty folder is a clearer
+    // answer than an error about a folder, since it shows there is nothing to send.
+    if let Err(error) = std::fs::create_dir_all(&directory) {
+        return Err(format!("could not open the log folder: {error}"));
+    }
+
+    std::process::Command::new("open")
+        .arg(&directory)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("could not open the log folder: {e}"))
 }
 
 /// Opens the System Settings pane for a permission.

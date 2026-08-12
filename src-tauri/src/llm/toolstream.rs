@@ -99,10 +99,15 @@ impl ToolCallStream {
                     serde_json::json!({})
                 } else {
                     serde_json::from_str(&partial.arguments).unwrap_or_else(|error| {
+                        // The arguments themselves stay out of the log. `capture_screen`
+                        // takes a `reason`, which the model writes by summarising what the
+                        // user asked for — so the malformed blob is user content wearing a
+                        // JSON costume. Its length is enough to tell a truncated stream
+                        // from a garbled one, which is what this line is for.
                         tracing::warn!(
                             %error,
                             name = %partial.name,
-                            arguments = %partial.arguments,
+                            characters = partial.arguments.chars().count(),
                             "tool-call arguments did not parse; treating as empty"
                         );
                         serde_json::json!({})

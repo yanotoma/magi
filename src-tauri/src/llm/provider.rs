@@ -199,6 +199,44 @@ pub enum LlmError {
     MalformedResponse { url: String, reason: String },
 }
 
+impl LlmError {
+    /// What is safe to write to a log file that outlives the run.
+    ///
+    /// Two audiences, and they want opposite things. The **user-facing** message keeps
+    /// everything — naming the URL and quoting the provider's own words is what makes an
+    /// error actionable, and M2 added that deliberately. The **log** is a file the user may
+    /// hand to a stranger in a bug report, so it carries only what Magi itself produced.
+    ///
+    /// The line that divides them is authorship, not sensitivity in the abstract:
+    ///
+    /// - The **URL travels**. It lives in `config.toml`, which this project keeps free of
+    ///   secrets precisely so it can be pasted into an issue, and an error that does not say
+    ///   what it tried to reach is the useless kind.
+    /// - **Provider text never travels.** `body` is a raw HTTP response and a rejection can
+    ///   quote the request back at you; `reason` on a malformed response comes from a parser
+    ///   that likes to include the input it choked on. Both are one indirection away from the
+    ///   conversation, so both are reduced to a length.
+    pub fn log_summary(&self) -> String {
+        match self {
+            Self::Unreachable { url, reason } => format!("unreachable: {url}: {reason}"),
+            Self::Unauthorized { url } => format!("unauthorized: {url}"),
+            Self::ModelNotFound { url, model } => format!("no model '{model}' at {url}"),
+            Self::Http { url, status, body } => {
+                format!(
+                    "http {status} from {url} ({} bytes of body, withheld)",
+                    body.len()
+                )
+            }
+            Self::MalformedResponse { url, reason } => {
+                format!(
+                    "malformed response from {url} ({} chars of detail, withheld)",
+                    reason.chars().count()
+                )
+            }
+        }
+    }
+}
+
 /// A PNG to send to the model, as raw bytes.
 ///
 /// Bytes and a media type rather than an encoded string, because the two families
@@ -459,6 +497,118 @@ impl Provider for FakeProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Something a provider might echo back that the user would not want in a file.
+    const QUOTED_BACK: &str = "invalid request: messages[0] said 'my salary is 90000'";
+
+    #[test]
+    fn a_provider_rejection_body_never_reaches_the_log() {
+        // The failure this exists to prevent: an API rejecting a request and quoting it
+        // back, landing the user's own question in a file they later attach to an issue.
+        let error = LlmError::Http {
+            url: "https://api.example.com/v1".into(),
+            status: 400,
+            body: QUOTED_BACK.into(),
+        };
+
+        let summary = error.log_summary();
+
+        assert!(!summary.contains("salary"), "body leaked: {summary}");
+        assert!(!summary.contains(QUOTED_BACK), "body leaked: {summary}");
+        // Still says enough to act on.
+        assert!(summary.contains("400"));
+        assert!(summary.contains("api.example.com"));
+    }
+
+    #[test]
+    fn the_user_facing_message_still_carries_everything() {
+        // The other half of the same decision. Reducing the log must not reduce the error
+        // the user reads — naming the provider and quoting its words is what makes it
+        // actionable, and M2 added that deliberately.
+        let error = LlmError::Http {
+            url: "https://api.example.com/v1".into(),
+            status: 400,
+            body: QUOTED_BACK.into(),
+        };
+
+        assert!(error.to_string().contains(QUOTED_BACK));
+    }
+
+    #[test]
+    fn a_parser_that_quotes_its_input_does_not_leak_it_either() {
+        // serde errors like to include the fragment they choked on, and that fragment is
+        // one indirection from the conversation.
+        let error = LlmError::MalformedResponse {
+            url: "https://api.example.com/v1".into(),
+            reason: format!("expected value at line 1 column 1: {QUOTED_BACK}"),
+        };
+
+        let summary = error.log_summary();
+
+        assert!(!summary.contains("salary"), "reason leaked: {summary}");
+        assert!(summary.contains("api.example.com"));
+    }
+
+    #[test]
+    fn the_url_does_travel() {
+        // Deliberate, and the opposite of the rule above. It lives in config.toml, which
+        // this project keeps free of secrets so it can be pasted into an issue — and an
+        // error that will not say what it tried to reach is the useless kind.
+        for error in [
+            LlmError::Unreachable {
+                url: "http://localhost:11434/v1".into(),
+                reason: "connection refused".into(),
+            },
+            LlmError::Unauthorized {
+                url: "http://localhost:11434/v1".into(),
+            },
+            LlmError::ModelNotFound {
+                url: "http://localhost:11434/v1".into(),
+                model: "qwen".into(),
+            },
+        ] {
+            assert!(
+                error.log_summary().contains("localhost:11434"),
+                "got: {}",
+                error.log_summary()
+            );
+        }
+    }
+
+    #[test]
+    fn every_variant_says_which_kind_it_was() {
+        // A summary that reduced everything to "an error occurred" would be safe and
+        // useless. Each one has to remain distinguishable from the others.
+        let summaries = [
+            LlmError::Unreachable {
+                url: "u".into(),
+                reason: "r".into(),
+            },
+            LlmError::Unauthorized { url: "u".into() },
+            LlmError::ModelNotFound {
+                url: "u".into(),
+                model: "m".into(),
+            },
+            LlmError::Http {
+                url: "u".into(),
+                status: 500,
+                body: "b".into(),
+            },
+            LlmError::MalformedResponse {
+                url: "u".into(),
+                reason: "r".into(),
+            },
+        ]
+        .map(|e| e.log_summary());
+
+        for (i, one) in summaries.iter().enumerate() {
+            for (j, other) in summaries.iter().enumerate() {
+                if i != j {
+                    assert_ne!(one, other, "two variants log identically");
+                }
+            }
+        }
+    }
 
     fn a_request() -> TurnRequest {
         TurnRequest {

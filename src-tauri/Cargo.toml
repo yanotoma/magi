@@ -75,6 +75,9 @@ thiserror = "2"
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# The rolling log file in ~/Library/Logs/Magi. A tray app opened from Finder has no stdout
+# anyone reads, so without this its diagnostics reach nobody — see `logging.rs`.
+tracing-appender = "0.2"
 
 # Metal does not exist off macOS, so the acceleration feature is target-gated
 # rather than unconditional. Cargo unions features across these tables, so the

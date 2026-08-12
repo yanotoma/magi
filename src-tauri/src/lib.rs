@@ -11,6 +11,7 @@ pub mod config;
 pub mod error;
 pub mod hotkey;
 pub mod llm;
+pub mod logging;
 pub mod permissions;
 pub mod session;
 pub mod stt;
@@ -32,7 +33,11 @@ use crate::config::Config;
 /// the startup path, where a failure means the app genuinely cannot run and there
 /// is no user-facing surface left to degrade into.
 pub fn run() {
-    init_tracing();
+    // Bound, not dropped. The guard flushes the file writer, and letting it fall out of
+    // scope here would stop the log file receiving anything — silently, with no error
+    // anywhere, which is precisely the failure `logging` exists to end. It lives until
+    // `run` returns, which is when the app exits.
+    let _log_guard = logging::init();
 
     tauri::Builder::default()
         .plugin(hotkey::plugin())
@@ -62,9 +67,15 @@ pub fn run() {
             // in the log, and leave the broken file untouched so it can be
             // repaired rather than silently overwritten.
             let config = Config::load(&config_dir).unwrap_or_else(|error| {
+                // The file name, not the path. The directory is Magi's own and never in
+                // doubt, while the path to it runs through the user's home and carries
+                // their account name into a file they may attach to a bug report.
                 tracing::error!(
                     %error,
-                    path = %Config::path_in(&config_dir).display(),
+                    file = %Config::path_in(&config_dir)
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy(),
                     "config could not be loaded; starting with defaults and leaving the file alone"
                 );
                 Config::default()
@@ -172,6 +183,8 @@ pub fn run() {
             commands::request_screen_recording,
             commands::test_capture,
             commands::open_permission_settings,
+            commands::get_logs,
+            commands::open_log_folder,
             commands::send_text_turn,
             commands::cancel_turn,
             commands::clear_session,
@@ -189,15 +202,4 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("fatal: Tauri failed to start");
-}
-
-/// Structured logging, off unless asked for.
-///
-/// `RUST_LOG=magi=debug` turns it on. A background app has no terminal the user
-/// is watching, so logging is for bug reports rather than for the running user.
-fn init_tracing() {
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("magi=info,warn"));
-
-    tracing_subscriber::fmt().with_env_filter(filter).init();
 }
