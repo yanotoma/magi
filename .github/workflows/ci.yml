@@ -106,7 +106,8 @@ jobs:
 
   # The only job that genuinely needs macOS: Tauri links WebKit, AppKit and Core
   # Graphics here, and a .app cannot be cross-compiled from Linux in practice.
-  # Signing and notarization join this job in M7.
+  # Signing and notarization still need a Developer ID certificate and stay out
+  # until there is one.
   build-macos:
     name: Build (macOS)
     runs-on: macos-14
@@ -123,6 +124,18 @@ jobs:
       - name: Install Rust toolchain
         run: rustup show
 
+      - name: Add the Apple targets
+        # Added here rather than in rust-toolchain.toml on purpose, and the note in
+        # Cargo.toml says why: listing them there makes every toolchain install on
+        # every platform fetch both, including the Linux jobs above that will never
+        # link a Mach-O.
+        #
+        # The runner is Apple Silicon, so aarch64 is already present and x86_64 is
+        # the one that does work. That is also where the risk is: whisper-rs compiles
+        # whisper.cpp through cmake, and a C++ dependency cross-compiling to the other
+        # arch is a different build from the one that passes natively.
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
@@ -136,7 +149,27 @@ jobs:
       - run: npm ci
 
       - name: Build
-        # --no-bundle stops before packaging. Bundling needs a Developer ID
-        # certificate, and putting signing credentials in CI before there is
-        # anything to distribute is risk for nothing. M7 adds it.
-        run: npm run tauri build -- --no-bundle
+        # --no-bundle stops before packaging. Bundling itself needs no certificate,
+        # but an unsigned .app is not a thing worth spending runner minutes on; the
+        # release workflow bundles once there is an identity to sign with.
+        #
+        # universal-apple-darwin builds both architectures and lipos them together,
+        # so this compiles the crate twice and is the slowest job here by some way.
+        run: npm run tauri build -- --no-bundle --target universal-apple-darwin
+
+      - name: Assert the binary is actually universal
+        # The reason this step exists rather than trusting the flag: `lipo` reports
+        # what is in the file, and a build that quietly produced one architecture
+        # would otherwise ship as "universal" on the strength of the argument having
+        # been passed. Half the Macs in the world are the half that would find out.
+        run: |
+          BIN=src-tauri/target/universal-apple-darwin/release/magi
+          test -f "$BIN" || { echo "no universal binary at $BIN"; exit 1; }
+          ARCHS=$(lipo -archs "$BIN")
+          echo "architectures: $ARCHS"
+          for want in arm64 x86_64; do
+            case " $ARCHS " in
+              *" $want "*) ;;
+              *) echo "missing $want"; exit 1 ;;
+            esac
+          done
