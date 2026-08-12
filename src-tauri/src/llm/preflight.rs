@@ -191,7 +191,7 @@ pub async fn run(provider: &dyn Provider, model: &str) -> Capabilities {
     match provider.probe(reach).await {
         Ok(_) => capabilities.reachable = true,
         Err(error) => {
-            tracing::info!(%error, model, "pre-flight: endpoint not reachable");
+            tracing::info!(summary = %error.log_summary(), model, "pre-flight: endpoint not reachable");
             return capabilities;
         }
     }
@@ -223,7 +223,7 @@ pub async fn run(provider: &dyn Provider, model: &str) -> Capabilities {
                 saw
             }
             Err(error) => {
-                tracing::info!(%error, model, "pre-flight: vision probe failed");
+                tracing::info!(summary = %error.log_summary(), model, "pre-flight: vision probe failed");
                 false
             }
         };
@@ -245,7 +245,7 @@ pub async fn run(provider: &dyn Provider, model: &str) -> Capabilities {
     capabilities.tools = match provider.probe(request).await {
         Ok(reply) => made_a_valid_call(&reply),
         Err(error) => {
-            tracing::info!(%error, model, "pre-flight: tool probe failed");
+            tracing::info!(summary = %error.log_summary(), model, "pre-flight: tool probe failed");
             false
         }
     };
@@ -259,7 +259,7 @@ pub async fn run(provider: &dyn Provider, model: &str) -> Capabilities {
     capabilities.structured_output = match provider.probe(request).await {
         Ok(reply) => returned_the_schema(&reply),
         Err(error) => {
-            tracing::info!(%error, model, "pre-flight: structured output probe failed");
+            tracing::info!(summary = %error.log_summary(), model, "pre-flight: structured output probe failed");
             false
         }
     };

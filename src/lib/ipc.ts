@@ -300,6 +300,24 @@ export const removeSpeechModel = async (model: SpeechModel): Promise<VoiceView> 
 export const openPermissionSettings = async (kind: "microphone" | "accessibility" | "screen-recording"): Promise<void> =>
   invoke("open_permission_settings", { kind });
 
+/** Where Magi writes its log, and whether it has written anything yet. */
+export type LogView = {
+  /** The directory, for display. Null only if there is no home directory. */
+  directory: string | null;
+  /** Whether the folder exists yet. */
+  exists: boolean;
+};
+
+export const getLogs = async (): Promise<LogView> => invoke<LogView>("get_logs");
+
+/**
+ * Reveals the log folder in Finder.
+ *
+ * Finder hides `~/Library` by default, so a path alone is not an instruction most
+ * people can follow.
+ */
+export const openLogFolder = async (): Promise<void> => invoke("open_log_folder");
+
 /**
  * The captured subject — either a full display or a specific application window.
  *

@@ -80,7 +80,13 @@ impl CapabilityCache {
             Err(error) => {
                 // Logged rather than surfaced. The user did not write this file and
                 // cannot fix it; the recovery is to probe again.
-                tracing::warn!(%error, path = %path.display(), "capability cache could not be read");
+                // File name only — see the note in `lib.rs`. The path runs through the
+                // user's home directory and the log is a file they may share.
+                tracing::warn!(
+                    %error,
+                    file = %path.file_name().unwrap_or_default().to_string_lossy(),
+                    "capability cache could not be read"
+                );
                 Self::empty()
             }
         }
